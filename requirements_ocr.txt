@@ -1,0 +1,11 @@
+mss==9.0.1
+opencv-python==4.8.1.78
+pyobjc==9.2
+numpy>=1.19.0,<2.0
+PyQt5==5.15.9
+torch<2.0
+torchvision>=0.5,<0.15
+easyocr
+pytesseract
+requests
+Pillow

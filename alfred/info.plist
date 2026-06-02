@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>bundleid</key>
+	<string>com.stockmonitor.workflow</string>
+	<key>category</key>
+	<string>Tools</string>
+	<key>connections</key>
+	<dict>
+		<key>1</key>
+		<array>
+			<dict>
+				<key>destinationuid</key>
+				<string>2</string>
+				<key>modifiersum</key>
+				<integer>0</integer>
+				<key>vitoclose</key>
+				<false/>
+			</dict>
+		</array>
+	</dict>
+	<key>createdby</key>
+	<string>Stock Monitor</string>
+	<key>description</key>
+	<string>启动股票监控</string>
+	<key>name</key>
+	<string>股票监控</string>
+	<key>objects</key>
+	<array>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>argumenttype</key>
+				<integer>0</integer>
+				<key>keyword</key>
+				<string>stock</string>
+				<key>subtext</key>
+				<string>启动股票监控</string>
+				<key>text</key>
+				<string>股票监控</string>
+				<key>withspace</key>
+				<false/>
+			</dict>
+			<key>type</key>
+			<string>alfred.workflow.input.keyword</string>
+			<key>uid</key>
+			<string>1</string>
+			<key>version</key>
+			<integer>1</integer>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>escaping</key>
+				<integer>102</integer>
+				<key>script</key>
+				<string>/Users/guoruby/code/monitorprice/alfred_launch.sh</string>
+				<key>scriptargtype</key>
+				<integer>0</integer>
+				<key>type</key>
+				<integer>0</integer>
+			</dict>
+			<key>type</key>
+			<string>alfred.workflow.action.script</string>
+			<key>uid</key>
+			<string>2</string>
+			<key>version</key>
+			<integer>2</integer>
+		</dict>
+	</array>
+</dict>
+</plist>
