@@ -174,7 +174,7 @@ class APIService {
             let high = Double(parts[safe: 33] ?? "") ?? price
             let low = Double(parts[safe: 34] ?? "") ?? price
 
-            let amount = Double(parts[safe: 37] ?? "") ?? 0 * 10000
+            let amount = (Double(parts[safe: 37] ?? "") ?? 0) * 10000
 
             let rawAmplitude = parts[safe: 43] ?? ""
             let rawVolRatio = parts[safe: 49] ?? ""
@@ -188,11 +188,11 @@ class APIService {
             let flowStrength = volume > 0 ? Double(netFlow) / Double(volume) * 100 : 0
 
             var buyPressure = 0
-            for i in [11, 13, 15, 17, 19] {
+            for i in [9, 11, 13, 15, 17] {
                 buyPressure += Int(parts[safe: i] ?? "") ?? 0
             }
             var sellPressure = 0
-            for i in [21, 23, 25, 27, 29] {
+            for i in [19, 21, 23, 25, 27] {
                 sellPressure += Int(parts[safe: i] ?? "") ?? 0
             }
             let pressureRatio = sellPressure > 0 ? Double(buyPressure) / Double(sellPressure) : 1.0
