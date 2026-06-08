@@ -5,7 +5,7 @@ class FloatingPanel: NSPanel {
     private var contentView_: FloatingContentView!
     private var originalPos: NSPoint = .zero
 
-    static let panelWidth: CGFloat = 115
+    static let panelWidth: CGFloat = 110
     static let panelHeight: CGFloat = 22
 
     func show() {
@@ -97,8 +97,8 @@ class FloatingContentView: NSView {
     private var isDragging: Bool = false
 
     private var deviationField: NSTextField!
+    private var signalField: NSTextField!
     private var toggleBtn: NSButton!
-    private var ampField: NSTextField!
 
     private var monitorState = MonitorState.shared
     private var timer: Timer?
@@ -129,13 +129,13 @@ class FloatingContentView: NSView {
         deviationField.isBezeled = false
         addSubview(deviationField)
 
-        ampField = NSTextField(labelWithString: "幅--%")
-        ampField.font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        ampField.textColor = NSColor(calibratedRed: 0.3, green: 0.3, blue: 0.35, alpha: 1)
-        ampField.alignment = .center
-        ampField.drawsBackground = false
-        ampField.isBezeled = false
-        addSubview(ampField)
+        signalField = NSTextField(labelWithString: "--")
+        signalField.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        signalField.textColor = NSColor(calibratedRed: 0.3, green: 0.3, blue: 0.35, alpha: 1)
+        signalField.alignment = .center
+        signalField.drawsBackground = false
+        signalField.isBezeled = false
+        addSubview(signalField)
 
         toggleBtn = NSButton(frame: .zero)
         toggleBtn.isBordered = false
@@ -155,7 +155,7 @@ class FloatingContentView: NSView {
         let cy: CGFloat = (h - 12) / 2
 
         deviationField.frame = NSRect(x: 4, y: cy, width: 52, height: 14)
-        ampField.frame = NSRect(x: 55, y: cy, width: 42, height: 14)
+        signalField.frame = NSRect(x: 55, y: cy, width: 36, height: 14)
         toggleBtn.frame = NSRect(x: w - 16, y: cy, width: 12, height: 12)
     }
 
@@ -234,14 +234,17 @@ class FloatingContentView: NSView {
         if state.isCircuitBreaker {
             deviationField.stringValue = "熔断"
             deviationField.textColor = NSColor(calibratedRed: 0.4, green: 0.4, blue: 0.4, alpha: 1)
+            signalField.stringValue = ""
         } else if state.ocrFailCount > 0 && state.isMonitoring {
             deviationField.stringValue = "失败"
             deviationField.textColor = NSColor(calibratedRed: 0.4, green: 0.4, blue: 0.4, alpha: 1)
+            signalField.stringValue = ""
         } else {
             let arrow: String
             switch state.signal {
             case "strong": arrow = "↑"
-            case "weak", "sell": arrow = "↓"
+            case "weak", "sell", "limit_down": arrow = "↓"
+            case "limit_up": arrow = "★"
             default: arrow = "→"
             }
 
@@ -252,14 +255,19 @@ class FloatingContentView: NSView {
                 deviationField.stringValue = String(format: "%.1f%%%@", state.deviationPercent, arrow)
                 deviationField.textColor = NSColor(calibratedRed: 0, green: 0.67, blue: 0, alpha: 1)
             }
-        }
 
-        let amp = state.amplitude
-        ampField.stringValue = String(format: "幅%.1f%%", amp)
-        if amp > 5 {
-            ampField.textColor = NSColor(red: 0.85, green: 0.15, blue: 0.15, alpha: 1)
-        } else {
-            ampField.textColor = NSColor(calibratedRed: 0.3, green: 0.3, blue: 0.35, alpha: 1)
+            // 买卖信号 + 置信度
+            let conf = state.patternConfidence
+            if state.buySignal {
+                signalField.stringValue = "B\(conf)"
+                signalField.textColor = NSColor(calibratedRed: 0.85, green: 0.15, blue: 0.15, alpha: 1)
+            } else if state.sellSignal {
+                signalField.stringValue = "S\(conf)"
+                signalField.textColor = NSColor(calibratedRed: 0, green: 0.55, blue: 0, alpha: 1)
+            } else {
+                signalField.stringValue = "\(conf)"
+                signalField.textColor = NSColor(calibratedRed: 0.45, green: 0.45, blue: 0.5, alpha: 1)
+            }
         }
 
         updateToggleIcon()
