@@ -241,31 +241,38 @@ class FloatingContentView: NSView {
             signalField.stringValue = ""
         } else {
             let arrow: String
+            var deviationColor: NSColor
             switch state.signal {
-            case "strong": arrow = "↑"
-            case "weak", "sell", "limit_down": arrow = "↓"
-            case "limit_up": arrow = "★"
-            default: arrow = "→"
+            case "strong":
+                arrow = "↑"
+                deviationColor = NSColor.red
+            case "weak", "sell", "limit_down":
+                arrow = "↓"
+                deviationColor = NSColor(calibratedRed: 0, green: 0.67, blue: 0, alpha: 1)
+            case "limit_up":
+                arrow = "★"
+                deviationColor = NSColor.red
+            default:
+                arrow = "→"
+                deviationColor = NSColor(calibratedRed: 0.4, green: 0.4, blue: 0.45, alpha: 1)
             }
 
             if state.deviationPercent >= 0 {
                 deviationField.stringValue = String(format: "+%.1f%%%@", state.deviationPercent, arrow)
-                deviationField.textColor = NSColor.red
             } else {
                 deviationField.stringValue = String(format: "%.1f%%%@", state.deviationPercent, arrow)
-                deviationField.textColor = NSColor(calibratedRed: 0, green: 0.67, blue: 0, alpha: 1)
             }
+            deviationField.textColor = deviationColor
 
             // 买卖信号 + 置信度
-            let conf = state.patternConfidence
             if state.buySignal {
-                signalField.stringValue = "B\(conf)"
+                signalField.stringValue = "B\(state.patternConfidence)"
                 signalField.textColor = NSColor(calibratedRed: 0.85, green: 0.15, blue: 0.15, alpha: 1)
             } else if state.sellSignal {
-                signalField.stringValue = "S\(conf)"
+                signalField.stringValue = "S\(state.patternConfidence)"
                 signalField.textColor = NSColor(calibratedRed: 0, green: 0.55, blue: 0, alpha: 1)
             } else {
-                signalField.stringValue = "\(conf)"
+                signalField.stringValue = "--"
                 signalField.textColor = NSColor(calibratedRed: 0.45, green: 0.45, blue: 0.5, alpha: 1)
             }
         }
