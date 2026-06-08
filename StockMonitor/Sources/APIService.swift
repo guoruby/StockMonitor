@@ -12,6 +12,8 @@ class APIService {
         self.session = URLSession(configuration: config)
     }
 
+    // MARK: - 股票名称查代码
+
     func searchStockCode(name: String, completion: @escaping (String?) -> Void) {
         guard let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
               let url = URL(string: "https://smartbox.gtimg.cn/s3/?q=\(encoded)&t=all") else {
@@ -68,24 +70,17 @@ class APIService {
         }
 
         let content = String(text[start..<end.lowerBound])
-        Logger.shared.info("parseSmartbox: 提取内容='\(content)'")
-
         let decoded = decodeUnicodeEscapes(content)
-        Logger.shared.info("parseSmartbox: 解码后='\(decoded)'")
 
         let results = decoded.components(separatedBy: "^")
-        Logger.shared.info("parseSmartbox: 结果数=\(results.count)")
-
-        for (idx, result) in results.enumerated() {
+        for result in results {
             let parts = result.components(separatedBy: "~")
-            Logger.shared.info("parseSmartbox: 结果[\(idx)] parts=\(parts)")
             guard parts.count >= 3 else { continue }
 
             let market = parts[0]
             let code = parts[1]
-            let name = parts[2]
 
-            if (market == "sh" || market == "sz") {
+            if market == "sh" || market == "sz" {
                 return code
             }
         }
@@ -110,6 +105,8 @@ class APIService {
         }
         return result
     }
+
+    // MARK: - 实时行情
 
     func fetchRealtimeData(stockCode: String, completion: @escaping (Result<StockData, Error>) -> Void) {
         let tencentCode: String
@@ -166,52 +163,93 @@ class APIService {
             }
 
             let name = parts[safe: 1] ?? stockCode
+            let prevClose = Double(parts[safe: 4] ?? "") ?? 0
             let openPrice = Double(parts[safe: 5] ?? "") ?? 0
             let volume = (Int(parts[safe: 6] ?? "") ?? 0) * 100
-            let buyVolume = (Int(parts[safe: 7] ?? "") ?? 0) * 100
-            let sellVolume = (Int(parts[safe: 8] ?? "") ?? 0) * 100
             let changePct = Double(parts[safe: 32] ?? "") ?? 0
-            let high = Double(parts[safe: 33] ?? "") ?? price
-            let low = Double(parts[safe: 34] ?? "") ?? price
-
+            let upLimit = Double(parts[safe: 33] ?? "") ?? 0
+            let downLimit = Double(parts[safe: 34] ?? "") ?? 0
             let amount = (Double(parts[safe: 37] ?? "") ?? 0) * 10000
-
-            let rawAmplitude = parts[safe: 43] ?? ""
-            let rawVolRatio = parts[safe: 49] ?? ""
-            let amplitude = Double(rawAmplitude) ?? 0
-            let volRatio = Double(rawVolRatio) ?? 1.0
-
-            Logger.shared.info("API解析: \(name)(\(stockCode)) 价=\(String(format:"%.2f",price)) 涨跌幅=\(changePct)% 振幅=\(rawAmplitude)->\(amplitude) 量比=\(rawVolRatio)->\(volRatio)")
+            let high = Double(parts[safe: 41] ?? "") ?? price
+            let low = Double(parts[safe: 42] ?? "") ?? price
+            let amplitude = Double(parts[safe: 43] ?? "") ?? 0
+            let volRatio = Double(parts[safe: 49] ?? "") ?? 1.0
 
             let vwap = volume > 0 ? amount / Double(volume) : price
-            let netFlow = buyVolume - sellVolume
-            let flowStrength = volume > 0 ? Double(netFlow) / Double(volume) * 100 : 0
 
-            var buyPressure = 0
-            for i in [9, 11, 13, 15, 17] {
-                buyPressure += Int(parts[safe: i] ?? "") ?? 0
-            }
-            var sellPressure = 0
-            for i in [19, 21, 23, 25, 27] {
-                sellPressure += Int(parts[safe: i] ?? "") ?? 0
-            }
-            let pressureRatio = sellPressure > 0 ? Double(buyPressure) / Double(sellPressure) : 1.0
+            Logger.shared.info("API解析: \(name)(\(stockCode)) 价=\(String(format:"%.2f",price)) 昨收=\(prevClose) 涨跌幅=\(changePct)% 振幅=\(amplitude) 量比=\(volRatio)")
 
             let tradingPeriod = Self.getTradingPeriod()
 
             let stockData = StockData(
-                name: name, code: stockCode, price: price, vwap: vwap,
-                changePct: changePct, volume: volume, amount: amount,
-                volRatio: volRatio, flowStrength: flowStrength,
-                buyPressure: buyPressure, sellPressure: sellPressure,
-                pressureRatio: pressureRatio,
-                open: openPrice, high: high, low: low,
-                tradingPeriod: tradingPeriod,
-                amplitude: amplitude
+                name: name, code: stockCode, price: price, prevClose: prevClose,
+                vwap: vwap, changePct: changePct, volume: volume, amount: amount,
+                volRatio: volRatio, open: openPrice, high: high, low: low,
+                tradingPeriod: tradingPeriod, amplitude: amplitude,
+                upLimit: upLimit, downLimit: downLimit
             )
             completion(.success(stockData))
         }.resume()
     }
+
+    // MARK: - 分时数据
+
+    func fetchMinuteData(stockCode: String, completion: @escaping ([MinuteData]?) -> Void) {
+        let tencentCode: String
+        if stockCode.hasPrefix("6") {
+            tencentCode = "sh\(stockCode)"
+        } else if stockCode.hasPrefix("0") || stockCode.hasPrefix("3") {
+            tencentCode = "sz\(stockCode)"
+        } else {
+            tencentCode = stockCode
+        }
+
+        let urlStr = "https://web.ifzq.gtimg.cn/appstock/app/minute/query?_var=min_data&code=\(tencentCode)"
+        guard let url = URL(string: urlStr) else {
+            completion(nil)
+            return
+        }
+
+        session.dataTask(with: url) { data, _, error in
+            if error != nil || data == nil {
+                completion(nil)
+                return
+            }
+
+            guard let text = String(data: data!, encoding: .utf8) else {
+                completion(nil)
+                return
+            }
+
+            // 解析: "0930 1272.00 600 76320000.00"
+            let pattern = "(\\d{4})\\s+([\\d.]+)\\s+(\\d+)\\s+([\\d.]+)"
+            guard let regex = try? NSRegularExpression(pattern: pattern) else {
+                completion(nil)
+                return
+            }
+
+            let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
+            var result: [MinuteData] = []
+            var prevCumVol = 0
+
+            for match in matches {
+                guard match.numberOfRanges == 5 else { continue }
+                let timeStr = String(text[Range(match.range(at: 1), in: text)!])
+                let price = Double(String(text[Range(match.range(at: 2), in: text)!])) ?? 0
+                let cumVol = Int(String(text[Range(match.range(at: 3), in: text)!])) ?? 0
+                let cumAmt = Double(String(text[Range(match.range(at: 4), in: text)!])) ?? 0
+                let minuteVol = cumVol - prevCumVol
+                prevCumVol = cumVol
+
+                result.append(MinuteData(time: timeStr, price: price, cumVol: cumVol, cumAmt: cumAmt, minuteVol: minuteVol))
+            }
+
+            Logger.shared.info("分时数据: \(stockCode) 共\(result.count)条")
+            completion(result.count > 0 ? result : nil)
+        }.resume()
+    }
+
+    // MARK: - 交易时段
 
     private static func getTradingPeriod() -> String {
         let now = Calendar.current.dateComponents([.hour, .minute, .weekday], from: Date())

@@ -20,7 +20,6 @@ class MonitorState: ObservableObject {
     @Published var changePct: Double = 0
     @Published var volRatio: Double = 1.0
     @Published var volumeStatus: String = "平量"
-    @Published var flowStrength: Double = 0
     @Published var signal: String = "neutral"
     @Published var pattern: String = "normal"
     @Published var patternReason: String = ""
@@ -31,6 +30,8 @@ class MonitorState: ObservableObject {
     @Published var statusMessage: String = "就绪"
     @Published var amplitude: Double = 0
     @Published var trendText: String = "--"
+    @Published var buySignal: Bool = false
+    @Published var sellSignal: Bool = false
 
     var config: AppConfig = AppConfig.load()
     private var timer: Timer?
@@ -103,7 +104,7 @@ class MonitorState: ObservableObject {
         deviation = ocrCurrentPrice - ocrAvgPrice
         deviationPercent = ocrAvgPrice > 0 ? (deviation / ocrAvgPrice) * 100 : 0
         currentPrice = ocrCurrentPrice
-        avgPrice = ocrAvgPrice
+        avgPrice = ocrAvg!
         lastUpdateTime = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
 
         Logger.shared.info("OCR偏离: 最新=\(String(format: "%.2f", ocrCurrentPrice)) 均价=\(String(format: "%.2f", ocrAvgPrice)) 偏离=\(String(format: "%.2f", deviationPercent))%")
@@ -148,34 +149,56 @@ class MonitorState: ObservableObject {
     }
 
     private func fetchAPIData(code: String) {
+        // 同时请求实时行情和分时数据
         APIService.shared.fetchRealtimeData(stockCode: code) { [weak self] result in
             guard let self = self else { return }
             switch result {
             case .success(let data):
-                DispatchQueue.main.async {
-                    self.vwap = data.vwap
-                    self.changePct = data.changePct
-                    self.volRatio = data.volRatio
-                    self.flowStrength = data.flowStrength
-                    self.volumeStatus = data.volRatio > 1.5 ? "放量" : data.volRatio < 0.7 ? "缩量" : "平量"
-                    self.tradingPeriod = data.tradingPeriod
-                    self.amplitude = data.amplitude
+                // 获取分时数据
+                APIService.shared.fetchMinuteData(stockCode: code) { [weak self] minuteData in
+                    guard let self = self else { return }
+                    DispatchQueue.main.async {
+                        self.vwap = data.vwap
+                        self.changePct = data.changePct
+                        self.volRatio = data.volRatio
+                        self.volumeStatus = data.volRatio > 1.5 ? "放量" : data.volRatio < 0.7 ? "缩量" : "平量"
+                        self.tradingPeriod = data.tradingPeriod
+                        self.amplitude = data.amplitude
 
-                    Logger.shared.info("API数据已更新: 量比=\(data.volRatio) 振幅=\(data.amplitude)%")
+                        // 计算趋势指标
+                        let trend: TrendIndicators
+                        if let minuteData = minuteData, minuteData.count >= 2 {
+                            trend = VWAPAnalyzer.calcTrendFromMinute(minuteData, prevClose: data.prevClose)
+                            Logger.shared.info("趋势指标: VWAP=\(trend.vwap) 零轴=\(String(format: "%.2f", trend.vwapVsZero))% 斜率=\(trend.slope) 加速度=\(trend.acceleration) 近期量比=\(trend.volRatioRecent)")
+                        } else {
+                            // 降级：用实时行情的VWAP
+                            let vwapVsZero = data.prevClose > 0 ? (data.vwap - data.prevClose) / data.prevClose * 100 : 0
+                            trend = TrendIndicators(vwap: data.vwap, vwapVsZero: vwapVsZero, slope: 0, acceleration: 0,
+                                                    vwapTrend: "unknown", recentAvgVol: 0, overallAvgVol: 0,
+                                                    volRatioRecent: data.volRatio)
+                            Logger.shared.info("分时数据不足，降级使用实时VWAP")
+                        }
 
-                    let analysis = VWAPAnalyzer.analyze(data: data)
-                    self.signal = analysis.signal
-                    self.pattern = analysis.pattern
-                    self.patternReason = analysis.reason
-                    self.patternConfidence = analysis.confidence
-                    self.recommendation = analysis.recommendation
+                        let analysis = VWAPAnalyzer.analyze(data: data, trend: trend)
+                        self.signal = analysis.signal
+                        self.pattern = analysis.pattern
+                        self.patternReason = analysis.reason
+                        self.patternConfidence = analysis.confidence
+                        self.recommendation = analysis.recommendation
+                        self.buySignal = analysis.buySignal
+                        self.sellSignal = analysis.sellSignal
 
-                    switch analysis.signal {
-                    case "strong": self.trendText = "↑ 多头"
-                    case "weak", "sell": self.trendText = "↓ 空头"
-                    default: self.trendText = "→ 震荡"
+                        switch analysis.signal {
+                        case "strong": self.trendText = "↑ 多头"
+                        case "sell", "weak", "limit_down": self.trendText = "↓ 空头"
+                        case "limit_up": self.trendText = "★ 涨停"
+                        default: self.trendText = "→ 震荡"
+                        }
+
+                        Logger.shared.info("信号: \(analysis.signal) 形态=\(analysis.pattern) 置信=\(analysis.confidence) 原因=\(analysis.reason)")
                     }
                 }
+
             case .failure(let error):
                 Logger.shared.error("API调用失败: \(error.localizedDescription)")
             }

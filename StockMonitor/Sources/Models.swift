@@ -65,32 +65,51 @@ struct ParsedOCR {
     let rawText: String
 }
 
+struct MinuteData {
+    let time: String
+    let price: Double
+    let cumVol: Int       // 累计成交量(手)
+    let cumAmt: Double    // 累计成交额(元)
+    let minuteVol: Int    // 当分钟成交量(手)
+}
+
+struct TrendIndicators {
+    let vwap: Double
+    let vwapVsZero: Double    // VWAP相对昨收价%
+    let slope: Double         // 均价斜率(元/分钟)
+    let acceleration: Double  // 均价加速度(元/分钟²)
+    let vwapTrend: String     // up/down/flat/unknown
+    let recentAvgVol: Double  // 近N分钟均量(手)
+    let overallAvgVol: Double // 全天均量(手)
+    let volRatioRecent: Double // 近期量/全天均量
+}
+
 struct StockData {
     let name: String
     let code: String
     let price: Double
+    let prevClose: Double
     let vwap: Double
     let changePct: Double
     let volume: Int
     let amount: Double
     let volRatio: Double
-    let flowStrength: Double
-    let buyPressure: Int
-    let sellPressure: Int
-    let pressureRatio: Double
     let open: Double
     let high: Double
     let low: Double
     let tradingPeriod: String
     let amplitude: Double
+    let upLimit: Double
+    let downLimit: Double
 }
 
 struct VWAPAnalysis {
-    let signal: String
-    let recommendation: String
+    let signal: String        // strong/sell/weak/neutral/limit_up/limit_down
+    let recommendation: String // buy/sell/hold/avoid
     let pattern: String
     let reason: String
     let confidence: Int
     let volumeStatus: String
-    let moneySignal: Int
+    let buySignal: Bool
+    let sellSignal: Bool
 }
