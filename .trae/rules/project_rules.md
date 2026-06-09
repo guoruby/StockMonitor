@@ -10,3 +10,11 @@
 - **提交信息**：简洁描述本次改动，用中文，格式如 `优化OCR采集：强制返回JSON格式、精简提示词、裁剪替代压缩`
 - **自动 push**：commit 后自动 push 到远程仓库
 - **敏感文件**：不提交敏感文件（.env、credentials 等），已通过 .gitignore 排除
+
+## 构建规范
+
+每次代码改动后，必须重新编译并打包 App：
+
+1. 编译：`cd StockMonitor && find Sources -name "*.swift" | xargs swiftc -O -framework Cocoa -framework Vision -framework Carbon -o .build/release/StockMonitor`
+2. 打包：`cd StockMonitor && bash build.sh`
+3. 产物：`StockMonitor/dist/股票价格监控.app`
