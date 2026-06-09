@@ -241,28 +241,20 @@ class FloatingContentView: NSView {
             signalField.stringValue = ""
         } else {
             let arrow: String
-            var deviationColor: NSColor
             switch state.signal {
-            case "strong":
-                arrow = "↑"
-                deviationColor = NSColor.red
-            case "weak", "sell", "limit_down":
-                arrow = "↓"
-                deviationColor = NSColor(calibratedRed: 0, green: 0.67, blue: 0, alpha: 1)
-            case "limit_up":
-                arrow = "★"
-                deviationColor = NSColor.red
-            default:
-                arrow = "→"
-                deviationColor = NSColor(calibratedRed: 0.4, green: 0.4, blue: 0.45, alpha: 1)
+            case "strong": arrow = "↑"
+            case "weak", "sell", "limit_down": arrow = "↓"
+            case "limit_up": arrow = "★"
+            default: arrow = "→"
             }
 
             if state.deviationPercent >= 0 {
                 deviationField.stringValue = String(format: "+%.1f%%%@", state.deviationPercent, arrow)
+                deviationField.textColor = NSColor.red
             } else {
                 deviationField.stringValue = String(format: "%.1f%%%@", state.deviationPercent, arrow)
+                deviationField.textColor = NSColor(calibratedRed: 0, green: 0.67, blue: 0, alpha: 1)
             }
-            deviationField.textColor = deviationColor
 
             // 买卖信号 + 置信度
             if state.buySignal {
