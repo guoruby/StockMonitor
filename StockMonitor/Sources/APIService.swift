@@ -167,8 +167,6 @@ class APIService {
             let openPrice = Double(parts[safe: 5] ?? "") ?? 0
             let volume = (Int(parts[safe: 6] ?? "") ?? 0) * 100
             let changePct = Double(parts[safe: 32] ?? "") ?? 0
-            let upLimit = Double(parts[safe: 33] ?? "") ?? 0
-            let downLimit = Double(parts[safe: 34] ?? "") ?? 0
             let amount = (Double(parts[safe: 37] ?? "") ?? 0) * 10000
             let high = Double(parts[safe: 41] ?? "") ?? price
             let low = Double(parts[safe: 42] ?? "") ?? price
@@ -176,6 +174,11 @@ class APIService {
             let volRatio = Double(parts[safe: 49] ?? "") ?? 1.0
 
             let vwap = volume > 0 ? amount / Double(volume) : price
+
+            // 根据股票代码计算涨跌停价
+            let limitRatio = Self.getLimitRatio(stockCode: stockCode, stockName: name)
+            let upLimit = prevClose > 0 ? (prevClose * (1 + limitRatio) * 100).rounded() / 100 : 0
+            let downLimit = prevClose > 0 ? (prevClose * (1 - limitRatio) * 100).rounded() / 100 : 0
 
             Logger.shared.info("API解析: \(name)(\(stockCode)) 价=\(String(format:"%.2f",price)) 昨收=\(prevClose) 涨跌幅=\(changePct)% 振幅=\(amplitude) 量比=\(volRatio)")
 
@@ -247,6 +250,21 @@ class APIService {
             Logger.shared.info("分时数据: \(stockCode) 共\(result.count)条")
             completion(result.count > 0 ? result : nil)
         }.resume()
+    }
+
+    // MARK: - 涨跌幅限制比例
+
+    private static func getLimitRatio(stockCode: String, stockName: String) -> Double {
+        // ST/*ST: 5%
+        if stockName.contains("*ST") || stockName.contains("ST") { return 0.05 }
+        // 创业板(300/301): 20%
+        if stockCode.hasPrefix("300") || stockCode.hasPrefix("301") { return 0.20 }
+        // 科创板(688/689): 20%
+        if stockCode.hasPrefix("688") || stockCode.hasPrefix("689") { return 0.20 }
+        // 北交所(83/87): 30%
+        if stockCode.hasPrefix("83") || stockCode.hasPrefix("87") { return 0.30 }
+        // 主板/中小板: 10%
+        return 0.10
     }
 
     // MARK: - 交易时段
