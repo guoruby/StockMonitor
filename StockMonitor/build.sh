@@ -14,7 +14,11 @@ echo "原生 Mac App 打包"
 echo "========================================="
 
 echo "编译 Release..."
-swift build -c release 2>&1 | tail -5
+if [ ! -f ".build/release/${EXECUTABLE}" ]; then
+    echo "手动编译（swift build 不可用）..."
+    mkdir -p .build/release
+    find Sources -name "*.swift" | xargs swiftc -O -framework Cocoa -framework Vision -framework Carbon -o ".build/release/${EXECUTABLE}"
+fi
 
 echo "创建 App Bundle..."
 rm -rf dist
