@@ -25,7 +25,7 @@ class VWAPAnalyzer {
         // 每分钟均价序列
         var vwapSeries: [Double] = []
         for d in minuteData {
-            let avg = d.cumVol > 0 ? d.cumAmt / Double(d.cumVol) : d.price
+            let avg = d.cumVol > 0 ? d.cumAmt / (Double(d.cumVol) * 100.0) : d.price
             vwapSeries.append(avg)
         }
 
