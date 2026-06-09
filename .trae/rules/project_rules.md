@@ -15,6 +15,6 @@
 
 每次代码改动后，必须重新编译并打包 App：
 
-1. 编译：`cd StockMonitor && find Sources -name "*.swift" | xargs swiftc -O -framework Cocoa -framework Vision -framework Carbon -o .build/release/StockMonitor`
-2. 打包：`cd StockMonitor && bash build.sh`
-3. 产物：`StockMonitor/dist/股票价格监控.app`
+1. 编译：`find Sources -name "*.swift" | xargs swiftc -O -framework Cocoa -framework Vision -framework Carbon -o .build/release/StockMonitor`
+2. 打包：`bash build.sh`
+3. 产物：`dist/股票价格监控.app`

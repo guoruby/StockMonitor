@@ -1,19 +1,15 @@
+# Build
 .build/
 dist/
-*.dmg
-*.pyc
-__pycache__/
-.venv/
-.idea/
-*.iml
 build/
-*.log
+
+# macOS
 *.DS_Store
+
+# Distribution
+*.dmg
+
+# Signing
 *.pem
 *.p12
 build.keychain
-
-monitor_config.json
-stock_info.json
-backup/
-ocr_*.log

@@ -13,16 +13,15 @@ macOS 原生股票价格监控工具，通过 OCR 识别同花顺中的股票名
 ## 构建
 
 ```bash
-cd StockMonitor
 ./build.sh
 ```
 
-构建产物在 `StockMonitor/dist/股票价格监控.app`。
+构建产物在 `dist/股票价格监控.app`。
 
 ## 运行
 
 ```bash
-open "StockMonitor/dist/股票价格监控.app"
+open "dist/股票价格监控.app"
 ```
 
 ## 权限
