@@ -9,6 +9,10 @@ build/
 # Distribution
 *.dmg
 
+# IDE
+.trae/
+.idea/
+
 # Signing
 *.pem
 *.p12
