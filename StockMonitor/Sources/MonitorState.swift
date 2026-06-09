@@ -175,7 +175,7 @@ class MonitorState: ObservableObject {
                             let vwapVsZero = data.prevClose > 0 ? (data.vwap - data.prevClose) / data.prevClose * 100 : 0
                             trend = TrendIndicators(vwap: data.vwap, vwapVsZero: vwapVsZero, slope: 0, acceleration: 0,
                                                     vwapTrend: "unknown", recentAvgVol: 0, overallAvgVol: 0,
-                                                    volRatioRecent: data.volRatio)
+                                                    volRatioRecent: data.volRatio, volPeakRatio: 1.0)
                             Logger.shared.info("分时数据不足，降级使用实时VWAP")
                         }
 

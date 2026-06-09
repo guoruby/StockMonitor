@@ -82,6 +82,7 @@ struct TrendIndicators {
     let recentAvgVol: Double  // 近N分钟均量(手)
     let overallAvgVol: Double // 全天均量(手)
     let volRatioRecent: Double // 近期量/全天均量
+    let volPeakRatio: Double  // 近期峰值量/全天峰值量
 }
 
 struct StockData {

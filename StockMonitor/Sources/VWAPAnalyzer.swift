@@ -19,7 +19,7 @@ class VWAPAnalyzer {
     static func calcTrendFromMinute(_ minuteData: [MinuteData], prevClose: Double, window: Int = 10) -> TrendIndicators {
         if minuteData.count < 2 {
             return TrendIndicators(vwap: 0, vwapVsZero: 0, slope: 0, acceleration: 0,
-                                   vwapTrend: "unknown", recentAvgVol: 0, overallAvgVol: 0, volRatioRecent: 1.0)
+                                   vwapTrend: "unknown", recentAvgVol: 0, overallAvgVol: 0, volRatioRecent: 1.0, volPeakRatio: 1.0)
         }
 
         // 每分钟均价序列
@@ -74,10 +74,15 @@ class VWAPAnalyzer {
         let recentAvgVol = recentVols.reduce(0.0, +) / Double(recentVols.count)
         let volRatioRecent: Double = overallAvgVol > 0 ? recentAvgVol / overallAvgVol : 1.0
 
+        // 峰值量比：近10分钟最高单分钟量 / 全天最高单分钟量
+        let overallPeakVol = vols.max() ?? 0
+        let recentPeakVol = recentVols.max() ?? 0
+        let volPeakRatio: Double = overallPeakVol > 0 ? recentPeakVol / overallPeakVol : 1.0
+
         return TrendIndicators(
             vwap: currentVwap, vwapVsZero: vwapVsZero, slope: slope, acceleration: acceleration,
             vwapTrend: vwapTrend, recentAvgVol: recentAvgVol, overallAvgVol: overallAvgVol,
-            volRatioRecent: volRatioRecent
+            volRatioRecent: volRatioRecent, volPeakRatio: volPeakRatio
         )
     }
 
@@ -96,6 +101,7 @@ class VWAPAnalyzer {
         let slope = trend.slope
         let acceleration = trend.acceleration
         let volRatioRecent = trend.volRatioRecent
+        let volPeakRatio = trend.volPeakRatio
 
         // ── 量能状态 ──
         let volumeStatus: String
@@ -135,8 +141,8 @@ class VWAPAnalyzer {
 
         if !buyBlocked {
             // 1. 放量回升（最强买入）
-            // 均线下方 + 斜率拐头(平/上) + 加速度>0 + 放量(>1.5)
-            if !priceAboveVwap && (slopeDir == "flat" || slopeDir == "up") && accPositive && volRatioRecent > 1.5 {
+            // 均线下方 + 斜率拐头(平/上) + 加速度>0 + 放量(>1.5) + 峰值比(>=0.7)
+            if !priceAboveVwap && (slopeDir == "flat" || slopeDir == "up") && accPositive && volRatioRecent > 1.5 && volPeakRatio >= 0.7 {
                 pattern = "放量回升"
                 buySignal = true
                 var conf = 85
@@ -203,11 +209,13 @@ class VWAPAnalyzer {
         // 卖出信号判定
         // ═══════════════════════════════════════
 
-        // 快速拉升判定：斜率上行+加速度为正=正在加速上涨，此时偏离均线是正常的
-        let isSurging = slopeDir == "up" && accPositive
+        // 快速拉升判定：斜率上行+加速度为正+量能配合+峰值比>=0.7+非涨停
+        let isLimitUp = data.upLimit > 0 && price >= data.upLimit * 0.998
+        let isSurging = (slopeDir == "up" && accPositive && volRatioRecent >= 0.6 && volPeakRatio >= 0.7) && !isLimitUp
 
         // 1. 放量滞涨（最危险）
-        if priceAboveVwap && vwapDistance > 2 && volRatioRecent > 1.5 && (slopeDir == "down" || accNegative) && !isSurging {
+        // 均线上方 + 偏离>2% + 放量(>1.5) + 峰值比(>=0.7) + 斜率下或减速 + 非快速拉升
+        if priceAboveVwap && vwapDistance > 2 && volRatioRecent > 1.5 && volPeakRatio >= 0.7 && (slopeDir == "down" || accNegative) && !isSurging {
             pattern = "放量滞涨"
             sellSignal = true
             var conf = 80
@@ -241,7 +249,8 @@ class VWAPAnalyzer {
         }
 
         // 4. 放量破位
-        if !priceAboveVwap && vwapDistance < -3 && volRatioRecent > 1.5 {
+        // 均线下方 + 偏离<-3% + 放量(>1.5) + 峰值比(>=0.7)
+        if !priceAboveVwap && vwapDistance < -3 && volRatioRecent > 1.5 && volPeakRatio >= 0.7 {
             pattern = "放量破位"
             sellSignal = true
             confidence = 85
@@ -264,7 +273,6 @@ class VWAPAnalyzer {
         // 最终信号映射
         // ═══════════════════════════════════════
 
-        let isLimitUp = data.upLimit > 0 && price >= data.upLimit * 0.998
         let isLimitDown = data.downLimit > 0 && price <= data.downLimit * 1.002
 
         // 涨停清除卖出信号，跌停清除买入信号
