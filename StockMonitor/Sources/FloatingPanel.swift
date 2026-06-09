@@ -5,7 +5,7 @@ class FloatingPanel: NSPanel {
     private var contentView_: FloatingContentView!
     private var originalPos: NSPoint = .zero
 
-    static let panelWidth: CGFloat = 110
+    static let panelWidth: CGFloat = 118
     static let panelHeight: CGFloat = 22
 
     func show() {
@@ -155,7 +155,7 @@ class FloatingContentView: NSView {
         let cy: CGFloat = (h - 12) / 2
 
         deviationField.frame = NSRect(x: 4, y: cy, width: 52, height: 14)
-        signalField.frame = NSRect(x: 55, y: cy, width: 36, height: 14)
+        signalField.frame = NSRect(x: 55, y: cy, width: 44, height: 14)
         toggleBtn.frame = NSRect(x: w - 16, y: cy, width: 12, height: 12)
     }
 
@@ -240,31 +240,30 @@ class FloatingContentView: NSView {
             deviationField.textColor = NSColor(calibratedRed: 0.4, green: 0.4, blue: 0.4, alpha: 1)
             signalField.stringValue = ""
         } else {
-            let arrow: String
-            switch state.signal {
-            case "strong": arrow = "↑"
-            case "weak", "sell", "limit_down": arrow = "↓"
-            case "limit_up": arrow = "★"
-            default: arrow = "→"
-            }
-
+            // 偏离度（颜色由正负决定）
             if state.deviationPercent >= 0 {
-                deviationField.stringValue = String(format: "+%.1f%%%@", state.deviationPercent, arrow)
+                deviationField.stringValue = String(format: "+%.1f%%", state.deviationPercent)
                 deviationField.textColor = NSColor.red
             } else {
-                deviationField.stringValue = String(format: "%.1f%%%@", state.deviationPercent, arrow)
+                deviationField.stringValue = String(format: "%.1f%%", state.deviationPercent)
                 deviationField.textColor = NSColor(calibratedRed: 0, green: 0.67, blue: 0, alpha: 1)
             }
 
-            // 买卖信号 + 置信度
+            // 买卖信号 + 置信度 + 箭头
             if state.buySignal {
-                signalField.stringValue = "B\(state.patternConfidence)"
+                signalField.stringValue = "B\(state.patternConfidence)↑"
                 signalField.textColor = NSColor(calibratedRed: 0.85, green: 0.15, blue: 0.15, alpha: 1)
             } else if state.sellSignal {
-                signalField.stringValue = "S\(state.patternConfidence)"
+                signalField.stringValue = "S\(state.patternConfidence)↓"
+                signalField.textColor = NSColor(calibratedRed: 0, green: 0.55, blue: 0, alpha: 1)
+            } else if state.signal == "limit_up" {
+                signalField.stringValue = "★"
+                signalField.textColor = NSColor.red
+            } else if state.signal == "limit_down" {
+                signalField.stringValue = "↓"
                 signalField.textColor = NSColor(calibratedRed: 0, green: 0.55, blue: 0, alpha: 1)
             } else {
-                signalField.stringValue = "--"
+                signalField.stringValue = "→"
                 signalField.textColor = NSColor(calibratedRed: 0.45, green: 0.45, blue: 0.5, alpha: 1)
             }
         }

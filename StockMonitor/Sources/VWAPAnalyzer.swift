@@ -158,8 +158,8 @@ class VWAPAnalyzer {
                 reason = "均线下方缩量企稳+卖压枯竭+偏离\(String(format: "%.1f", vwapDistance))%+\(volumeStatus)，经典买点"
             }
             // 3. 突破启动
-            // 均线上方 + 斜率拐头(平/上) + 加速度>0 + 偏离<3%
-            else if priceAboveVwap && (slopeDir == "flat" || slopeDir == "up") && accPositive && vwapDistance < 3 {
+            // 均线上方 + 斜率拐头(平/上) + 加速度>0 + 偏离<3% + 量能配合(>=0.8)
+            else if priceAboveVwap && (slopeDir == "flat" || slopeDir == "up") && accPositive && vwapDistance < 3 && volRatioRecent >= 0.8 {
                 pattern = "突破启动"
                 buySignal = true
                 var conf = 65
@@ -169,8 +169,8 @@ class VWAPAnalyzer {
                 reason = "均线上方突破启动+斜率拐头+零轴\(vwapAboveZero ? "上方" : "附近")，趋势启动信号"
             }
             // 4. 加速上涨
-            // 斜率向上 + 加速度>0 + 偏离<3%
-            else if slopeDir == "up" && accPositive && vwapDistance < 3 {
+            // 斜率向上 + 加速度>0 + 偏离<3% + 量能配合(>=0.8，缩量上涨是量价背离不买入)
+            else if slopeDir == "up" && accPositive && vwapDistance < 3 && volRatioRecent >= 0.8 {
                 pattern = "加速上涨"
                 buySignal = true
                 var conf = 55
@@ -267,6 +267,10 @@ class VWAPAnalyzer {
         let isLimitUp = data.upLimit > 0 && price >= data.upLimit * 0.998
         let isLimitDown = data.downLimit > 0 && price <= data.downLimit * 1.002
 
+        // 涨停清除卖出信号，跌停清除买入信号
+        if isLimitUp { sellSignal = false }
+        if isLimitDown { buySignal = false }
+
         let signal: String
         let recommendation: String
 
@@ -279,15 +283,9 @@ class VWAPAnalyzer {
         } else if sellSignal {
             signal = "sell"
             recommendation = "sell"
-        } else if buySignal && confidence >= 50 {
+        } else if buySignal {
             signal = "strong"
             recommendation = "buy"
-        } else if !priceAboveVwap && vwapDistance < -1 {
-            signal = "strong"
-            recommendation = "buy"
-        } else if priceAboveVwap && vwapDistance > 1 {
-            signal = "weak"
-            recommendation = "sell"
         } else {
             signal = "neutral"
             recommendation = "hold"
