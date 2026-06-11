@@ -33,6 +33,16 @@ class MemoPanel: NSPanel {
         NotificationCenter.default.addObserver(
             forName: NSWindow.didResizeNotification, object: self, queue: .main
         ) { [weak self] _ in self?.layoutSubviews() }
+
+        // 失焦 → 渲染Markdown
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification, object: self, queue: .main
+        ) { [weak self] _ in self?.reapplyMarkdownStyle() }
+
+        // 聚焦 → 恢复纯文本显示
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: self, queue: .main
+        ) { [weak self] _ in self?.clearStyles() }
     }
 
     override var canBecomeKey: Bool { true }
@@ -117,11 +127,85 @@ class MemoPanel: NSPanel {
     // 重新应用 Markdown 样式（保留光标位置）
     func reapplyMarkdownStyle() {
         guard let storage = textView.textStorage else { return }
-        let selectedRanges = textView.selectedRanges
-        let plain = storage.string
-        let rendered = MarkdownRenderer.render(plain)
-        storage.setAttributedString(rendered)
-        textView.selectedRanges = selectedRanges
+        let plain = storage.string as NSString
+        let fullRange = NSRange(location: 0, length: plain.length)
+        let baseFont = NSFont.systemFont(ofSize: 13)
+        let defaultColor = NSColor(calibratedRed: 0.2, green: 0.2, blue: 0.2, alpha: 1)
+
+        // 重置全部为默认样式
+        storage.beginEditing()
+        storage.setAttributes([.font: baseFont, .foregroundColor: defaultColor], range: fullRange)
+
+        // 逐行处理（标题）
+        let lines = plain.components(separatedBy: "\n")
+        var lineStart = 0
+        for line in lines {
+            let lineLen = (line as NSString).length
+            if line.hasPrefix("# ") {
+                storage.addAttributes([
+                    .font: NSFont.boldSystemFont(ofSize: 16),
+                    .foregroundColor: defaultColor
+                ], range: NSRange(location: lineStart, length: 2))
+            } else if line.hasPrefix("## ") {
+                storage.addAttributes([
+                    .font: NSFont.boldSystemFont(ofSize: 14),
+                    .foregroundColor: defaultColor
+                ], range: NSRange(location: lineStart, length: 3))
+            }
+            lineStart += lineLen + 1 // +1 for newline
+        }
+
+        // 处理内联标记
+        let pattern = "(\\*\\*[^*]+\\*\\*)|(\\*[^*]+\\*)|(\\[red\\][^\\[]+\\[/red\\])|(\\[green\\][^\\[]+\\[/green\\])|(\\[blue\\][^\\[]+\\[/blue\\])"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            storage.endEditing()
+            return
+        }
+        let matches = regex.matches(in: plain as String, range: fullRange)
+
+        for match in matches {
+            let matched = plain.substring(with: match.range)
+            if matched.hasPrefix("**") && matched.hasSuffix("**") {
+                let inner = String(matched.dropFirst(2).dropLast(2))
+                applyInline(storage: storage, at: match.range, originalLength: matched.count, newString: inner) {
+                    NSFont.boldSystemFont(ofSize: baseFont.pointSize)
+                }
+            } else if matched.hasPrefix("*") && matched.hasSuffix("*") && matched.count > 2 {
+                let inner = String(matched.dropFirst().dropLast())
+                let italicDesc = baseFont.fontDescriptor.withSymbolicTraits(.italic)
+                let italicFont = NSFont(descriptor: italicDesc, size: baseFont.pointSize) ?? baseFont
+                applyInline(storage: storage, at: match.range, originalLength: matched.count, newString: inner) {
+                    italicFont
+                }
+            } else if matched.hasPrefix("[red]") {
+                let inner = String(matched.dropFirst(5).dropLast(6))
+                applyInline(storage: storage, at: match.range, originalLength: matched.count, newString: inner) {
+                    NSColor.red
+                }
+            } else if matched.hasPrefix("[green]") {
+                let inner = String(matched.dropFirst(7).dropLast(8))
+                applyInline(storage: storage, at: match.range, originalLength: matched.count, newString: inner) {
+                    NSColor(calibratedRed: 0, green: 0.55, blue: 0, alpha: 1)
+                }
+            } else if matched.hasPrefix("[blue]") {
+                let inner = String(matched.dropFirst(6).dropLast(7))
+                applyInline(storage: storage, at: match.range, originalLength: matched.count, newString: inner) {
+                    NSColor.blue
+                }
+            }
+        }
+
+        storage.endEditing()
+    }
+
+    // 给内联标记整段染色（包括 Markdown 符号本身），视觉上符号也变色
+    private func applyInline(storage: NSTextStorage, at range: NSRange, originalLength: Int, newString: String, attr: () -> Any) {
+        if let font = attr() as? NSFont {
+            storage.addAttribute(.font, value: font, range: range)
+        }
+        if let color = attr() as? NSColor {
+            storage.addAttribute(.foregroundColor, value: color, range: range)
+        }
     }
 
     private func layoutSubviews() {
@@ -156,6 +240,19 @@ class MemoPanel: NSPanel {
         showContextMenu(at: NSEvent.mouseLocation)
     }
 
+    // 清除所有样式（恢复纯文本显示，不改变字符串内容）
+    func clearStyles() {
+        guard let storage = textView.textStorage else { return }
+        let baseFont = NSFont.systemFont(ofSize: 13)
+        let defaultColor = NSColor(calibratedRed: 0.2, green: 0.2, blue: 0.2, alpha: 1)
+        storage.beginEditing()
+        storage.setAttributes(
+            [.font: baseFont, .foregroundColor: defaultColor],
+            range: NSRange(location: 0, length: storage.length)
+        )
+        storage.endEditing()
+    }
+
     func showContextMenu(at point: NSPoint) {
         let menu = NSMenu()
         let closeItem = NSMenuItem(title: "关闭便签", action: #selector(closeMemo), keyEquivalent: "")
@@ -178,7 +275,7 @@ class MemoPanel: NSPanel {
 extension MemoPanel: NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
         saveText()
-        reapplyMarkdownStyle()
+        // 不在编辑时实时渲染，避免光标错乱；只在失焦时渲染
     }
 }
 
