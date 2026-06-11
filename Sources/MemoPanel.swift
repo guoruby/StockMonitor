@@ -3,14 +3,9 @@ import Cocoa
 // MARK: - 便签窗口
 //
 // 设计：失焦渲染（最简单可靠的方案）
-// - editView：纯文本，isRichText = false，isEditable = true
-// - previewView：富文本，isRichText = true，isEditable = false，显示渲染结果
-// - 当前状态：
-//   - 窗口是 keyWindow → 显示 editView（编辑）
-//   - 窗口失去焦点 → 显示 previewView（预览，已渲染）
-//   - 窗口重新获得焦点 → 切回 editView
-// - 由于两个视图完全分离，不会出现 setAttributedString 递归崩溃
-// - 注意：编辑过程中 editView 是纯文本（** 标记可见），预览是富文本（** 隐藏）
+// - editView：纯文本编辑
+// - previewView：富文本预览
+// - 默认以预览态展示，点击进入编辑态；失焦回到预览态
 
 class MemoPanel: NSPanel {
     private let memoId: String
@@ -19,10 +14,14 @@ class MemoPanel: NSPanel {
     private var editScroll: NSScrollView!
     private var previewScroll: NSScrollView!
     private var isClosing = false
+
+    // 拖拽状态（panel 层级）
     private var isCmdDragging = false
     private var cmdDragStartPos: NSPoint = .zero
     private var cmdDragStartFrameOrigin: NSPoint = .zero
-    private var isInEditMode = true  // 是否处于编辑态
+
+    /// 当前是否处于编辑态（false = 预览态）
+    private var isInEditMode = false
 
     init(memo: MemoItem) {
         self.memoId = memo.id
@@ -35,7 +34,6 @@ class MemoPanel: NSPanel {
         )
 
         becomesKeyOnlyIfNeeded = false
-
         isFloatingPanel = true
         level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.floatingWindow)))
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -45,6 +43,7 @@ class MemoPanel: NSPanel {
         hasShadow = true
 
         setupContent(text: memo.text)
+        buildContextMenu()
 
         // 监听窗口焦点变化
         NotificationCenter.default.addObserver(
@@ -55,6 +54,9 @@ class MemoPanel: NSPanel {
             self, selector: #selector(windowDidResignKey),
             name: NSWindow.didResignKeyNotification, object: self
         )
+
+        // 默认以预览态展示
+        switchToPreview()
     }
 
     deinit {
@@ -64,11 +66,13 @@ class MemoPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 
+    // MARK: - 构建 UI
+
     private func setupContent(text: String) {
         let container = MemoContainerView(frame: NSRect(x: 0, y: 0, width: 200, height: 150))
         container.panel = self
 
-        // 嵌入 scrollView 让 resize 时正确处理
+        // === 编辑 ScrollView + TextView ===
         let editScroll = NSScrollView(frame: NSRect(x: 6, y: 4, width: 188, height: 142))
         editScroll.hasVerticalScroller = true
         editScroll.hasHorizontalScroller = false
@@ -77,7 +81,6 @@ class MemoPanel: NSPanel {
         editScroll.autohidesScrollers = true
         editScroll.autoresizingMask = [.width, .height]
 
-        // 编辑视图：纯文本
         let contentSize = editScroll.contentSize
         editView = MemoTextView(frame: NSRect(origin: .zero, size: contentSize))
         editView.font = NSFont.systemFont(ofSize: 13)
@@ -101,7 +104,7 @@ class MemoPanel: NSPanel {
         editScroll.documentView = editView
         container.addSubview(editScroll)
 
-        // 预览视图：富文本，不可编辑
+        // === 预览 ScrollView + TextView ===
         let previewScroll = NSScrollView(frame: NSRect(x: 6, y: 4, width: 188, height: 142))
         previewScroll.hasVerticalScroller = true
         previewScroll.hasHorizontalScroller = false
@@ -112,8 +115,6 @@ class MemoPanel: NSPanel {
 
         let pSize = previewScroll.contentSize
         previewView = MemoTextView(frame: NSRect(origin: .zero, size: pSize))
-        previewView.isEditable = false
-        previewView.isPreviewMode = true
         previewView.font = NSFont.systemFont(ofSize: 13)
         previewView.textColor = NSColor(calibratedRed: 0.2, green: 0.2, blue: 0.2, alpha: 1)
         previewView.backgroundColor = .clear
@@ -128,10 +129,8 @@ class MemoPanel: NSPanel {
         previewView.textContainer?.containerSize = NSSize(width: pSize.width, height: CGFloat.greatestFiniteMagnitude)
         previewView.textContainer?.widthTracksTextView = true
         previewScroll.documentView = previewView
-        previewScroll.isHidden = true
         container.addSubview(previewScroll)
 
-        // 保存 scrollView 引用，方便 resize 时调整 textView 的 frame
         self.editScroll = editScroll
         self.previewScroll = previewScroll
 
@@ -140,6 +139,29 @@ class MemoPanel: NSPanel {
         NotificationCenter.default.addObserver(
             forName: NSWindow.didResizeNotification, object: self, queue: .main
         ) { [weak self] _ in self?.layoutSubviews() }
+    }
+
+    /// 构建右键菜单并挂载到所有可交互视图上
+    /// 使用 NSView.menu 属性是最可靠的方式——系统原生支持右键弹出
+    private func buildContextMenu() {
+        let menu = NSMenu()
+        let hideItem = NSMenuItem(title: "隐藏便签", action: #selector(hideMemo), keyEquivalent: "")
+        hideItem.target = self
+        menu.addItem(hideItem)
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "--- 格式化语法 ---", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "**加粗文字**", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "*斜体文字*", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "[red]红色[/red]", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "[green]绿色[/green]", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "[blue]蓝色[/blue]", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "# 标题", action: nil, keyEquivalent: ""))
+
+        // 挂载到 scrollView 和 textView 上（确保无论哪个层级拦截都能触发）
+        editScroll.menu = menu
+        editView.menu = menu
+        previewScroll.menu = menu
+        previewView.menu = menu
     }
 
     // MARK: - 保存
@@ -151,11 +173,12 @@ class MemoPanel: NSPanel {
                                  width: f.width, height: f.height)
     }
 
-    /// 保存当前内容（保留 Markdown 标记，从 editView 取）
     func saveText() {
         let text = (editView.string as String)
         MemoStore.shared.update(id: memoId, text: text)
     }
+
+    // MARK: - 拖拽
 
     func beginCmdDrag(_ pos: NSPoint) {
         isCmdDragging = true
@@ -176,11 +199,10 @@ class MemoPanel: NSPanel {
     }
 
     private func layoutSubviews() {
-        // scrollView 设置了 autoresizingMask=[.width,.height]，会自动跟随 contentView 调整大小
-        // textView 跟着 scrollView.contentSize 走，且 autoresizingMask=[.width] 跟随宽度
-        // 容器 resize 后，contentView 也会 resize，然后 scrollView 自动填满
-        // 这里不需要手动操作
+        // scrollView autoresizingMask=[.width,.height] 自动跟随 contentView
     }
+
+    // MARK: - Panel 鼠标事件（处理 Cmd+拖拽移动窗口）
 
     override func mouseDown(with event: NSEvent) {
         if event.modifierFlags.contains(.command) {
@@ -202,11 +224,14 @@ class MemoPanel: NSPanel {
         else { super.mouseUp(with: event) }
     }
 
+    // MARK: - 右键菜单（fallback，menu 属性已覆盖大部分情况）
+
     override func rightMouseDown(with event: NSEvent) {
         showContextMenu(at: NSEvent.mouseLocation)
     }
 
     func showContextMenu(at point: NSPoint) {
+        // 如果已有 menu 属性，系统会自动弹出；这里作为 fallback 手动弹出
         let menu = NSMenu()
         let hideItem = NSMenuItem(title: "隐藏便签", action: #selector(hideMemo), keyEquivalent: "")
         hideItem.target = self
@@ -232,10 +257,18 @@ class MemoPanel: NSPanel {
         NotificationCenter.default.post(name: .memoDidHide, object: nil, userInfo: ["id": memoId])
     }
 
-    // MARK: - 失焦渲染
+    // MARK: - 编辑/预览切换
 
     @objc private func windowDidResignKey(_ notification: Notification) {
-        // 失去焦点：保存 + 切换到预览视图
+        switchToPreview()
+    }
+
+    @objc private func windowDidBecomeKey(_ notification: Notification) {
+        switchToEdit()
+    }
+
+    private func switchToPreview() {
+        guard isInEditMode else { return }
         saveText()
         isInEditMode = false
         refreshPreview()
@@ -243,8 +276,8 @@ class MemoPanel: NSPanel {
         editScroll.isHidden = true
     }
 
-    @objc private func windowDidBecomeKey(_ notification: Notification) {
-        // 获得焦点：切回编辑视图
+    private func switchToEdit() {
+        guard !isInEditMode else { return }
         isInEditMode = true
         editScroll.isHidden = false
         previewScroll.isHidden = true
@@ -257,7 +290,8 @@ class MemoPanel: NSPanel {
         previewView.textStorage?.setAttributedString(renderMarkdown(raw))
     }
 
-    /// 把整段 Markdown 文本渲染为 AttributedString
+    // MARK: - Markdown 渲染
+
     private func renderMarkdown(_ text: String) -> NSAttributedString {
         let baseFont = NSFont.systemFont(ofSize: 13)
         let defaultColor = NSColor(calibratedRed: 0.2, green: 0.2, blue: 0.2, alpha: 1)
@@ -274,7 +308,6 @@ class MemoPanel: NSPanel {
         return result
     }
 
-    /// 解析单行 Markdown
     private func renderLine(_ line: String, baseFont: NSFont, defaultColor: NSColor) -> NSAttributedString {
         var font = baseFont
         var contentStart = 0
@@ -384,6 +417,7 @@ class MemoContainerView: NSView {
             isCmdDragging = true
             panel?.beginCmdDrag(NSEvent.mouseLocation)
         } else {
+            // 点击空白区域 → 进入编辑态
             panel?.makeKeyAndOrderFront(nil)
             panel?.editView.window?.makeFirstResponder(panel?.editView)
         }
@@ -400,15 +434,12 @@ class MemoContainerView: NSView {
 
 // MARK: - TextView
 
+/// 编辑态专用 TextView：只负责文本输入，不做任何特殊拦截
 class MemoTextView: NSTextView {
     weak var panel: MemoPanel?
     private var isCmdDragging = false
 
-    /// 预览态时忽略鼠标拖拽
-    var isPreviewMode: Bool = false
-
     override func mouseDown(with event: NSEvent) {
-        if isPreviewMode { return }
         if event.modifierFlags.contains(.command) {
             isCmdDragging = true
             panel?.beginCmdDrag(NSEvent.mouseLocation)
@@ -418,22 +449,16 @@ class MemoTextView: NSTextView {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        if isPreviewMode { return }
         if isCmdDragging { panel?.continueCmdDrag(NSEvent.mouseLocation) }
         else { super.mouseDragged(with: event) }
     }
 
     override func mouseUp(with event: NSEvent) {
-        if isPreviewMode { return }
         if isCmdDragging { isCmdDragging = false; panel?.endCmdDrag() }
         else { super.mouseUp(with: event) }
     }
 
-    override func rightMouseDown(with event: NSEvent) {
-        panel?.showContextMenu(at: NSEvent.mouseLocation)
-    }
-
-    /// 禁用系统默认的"编辑菜单"，强制走我们自己的右键菜单
+    /// 禁用系统默认的"编辑菜单"（复制/粘贴等），让 NSView.menu 生效
     override func menu(for event: NSEvent) -> NSMenu? {
         return nil
     }
