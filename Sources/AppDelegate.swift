@@ -77,6 +77,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusMenu.addItem(withTitle: "新建便签", action: #selector(newMemo), keyEquivalent: "n")
         let openMemoItem = statusMenu.addItem(withTitle: "打开便签", action: nil, keyEquivalent: "o")
         openMemoItem.submenu = buildOpenMemoSubmenu()
+        let deleteMemoItem = statusMenu.addItem(withTitle: "删除便签", action: nil, keyEquivalent: "")
+        deleteMemoItem.submenu = buildDeleteMemoSubmenu()
         statusMenu.addItem(NSMenuItem.separator())
         statusMenu.addItem(withTitle: "设置...", action: #selector(openSettings), keyEquivalent: ",")
         statusMenu.addItem(withTitle: "打开日志文件夹", action: #selector(openLogFolder), keyEquivalent: "")
@@ -145,6 +147,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // 构建便签子菜单（动态内容）
     private func buildOpenMemoSubmenu() -> NSMenu {
         let menu = NSMenu(title: "打开便签")
+        menu.delegate = self
+        return menu
+    }
+
+    // 构建删除便签子菜单（动态内容）
+    private func buildDeleteMemoSubmenu() -> NSMenu {
+        let menu = NSMenu(title: "删除便签")
         menu.delegate = self
         return menu
     }
@@ -271,13 +280,20 @@ extension AppDelegate: NSMenuDelegate {
                 }
                 menu.addItem(item)
             }
-            menu.addItem(NSMenuItem.separator())
-            // 每个便签带一个删除子项
+        } else if menu.title == "删除便签" {
+            // 动态刷新删除列表
+            menu.removeAllItems()
+            let memos = MemoStore.shared.memos
+            if memos.isEmpty {
+                menu.addItem(withTitle: "(暂无便签)", action: nil, keyEquivalent: "")
+                return
+            }
             for memo in memos {
-                let delItem = NSMenuItem(title: "删除：\(memoPreviewTitle(memo))", action: #selector(deleteMemo(_:)), keyEquivalent: "")
-                delItem.target = self
-                delItem.representedObject = memo.id
-                menu.addItem(delItem)
+                let title = memoPreviewTitle(memo)
+                let item = NSMenuItem(title: title, action: #selector(deleteMemo(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = memo.id
+                menu.addItem(item)
             }
         }
     }
