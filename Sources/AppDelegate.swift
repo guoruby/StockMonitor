@@ -6,6 +6,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
     var statusMenu: NSMenu!
     var settingsWindow: NSWindow?
+    var memoPanels: [String: MemoPanel] = [:]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Logger.shared.info("应用启动，日志目录: \(Logger.shared.logDirPath)")
@@ -13,7 +14,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         setupMenuBarIcon()
         setupFloatingPanel()
+        restoreMemos()
         _ = HotkeyManager.shared
+
+        NotificationCenter.default.addObserver(
+            forName: .memoDidClose, object: nil, queue: .main
+        ) { [weak self] notification in
+            if let id = notification.userInfo?["id"] as? String {
+                self?.memoPanels.removeValue(forKey: id)
+            }
+        }
 
         NotificationCenter.default.addObserver(
             forName: .toggleMonitoring, object: nil, queue: .main
@@ -56,6 +66,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusMenu.addItem(NSMenuItem.separator())
         statusMenu.addItem(withTitle: "开始/停止监控", action: #selector(toggleMonitoring), keyEquivalent: "l")
         statusMenu.addItem(NSMenuItem.separator())
+        statusMenu.addItem(withTitle: "新建便签", action: #selector(newMemo), keyEquivalent: "n")
+        statusMenu.addItem(NSMenuItem.separator())
         statusMenu.addItem(withTitle: "设置...", action: #selector(openSettings), keyEquivalent: ",")
         statusMenu.addItem(withTitle: "打开日志文件夹", action: #selector(openLogFolder), keyEquivalent: "")
         statusMenu.addItem(NSMenuItem.separator())
@@ -94,6 +106,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleMonitoring() {
         floatingPanel?.toggleMonitoring()
+    }
+
+    @objc private func newMemo() {
+        let screenFrame = NSScreen.main!.visibleFrame
+        let offsetX = Double(memoPanels.count % 5) * 30
+        let offsetY = Double(memoPanels.count % 5) * 30
+        let x = screenFrame.minX + 100 + offsetX
+        let y = screenFrame.maxY - 250 - offsetY
+
+        let memo = MemoItem(
+            id: UUID().uuidString,
+            text: "",
+            x: x, y: y,
+            width: 200, height: 150,
+            createdAt: ISO8601DateFormatter().string(from: Date())
+        )
+        MemoStore.shared.add(memo)
+        showMemoPanel(memo)
+    }
+
+    private func restoreMemos() {
+        for memo in MemoStore.shared.memos {
+            showMemoPanel(memo)
+        }
+    }
+
+    private func showMemoPanel(_ memo: MemoItem) {
+        let panel = MemoPanel(memo: memo)
+        panel.orderFrontRegardless()
+        memoPanels[memo.id] = panel
     }
 
     @objc private func openSettings() {

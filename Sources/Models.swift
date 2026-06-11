@@ -114,3 +114,13 @@ struct VWAPAnalysis {
     let buySignal: Bool
     let sellSignal: Bool
 }
+
+struct MemoItem: Codable {
+    let id: String
+    var text: String
+    var x: Double
+    var y: Double
+    var width: Double
+    var height: Double
+    var createdAt: String
+}
