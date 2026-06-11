@@ -154,8 +154,8 @@ class FloatingContentView: NSView {
         let h = bounds.height
         let cy: CGFloat = (h - 12) / 2
 
-        deviationField.frame = NSRect(x: 4, y: cy, width: 52, height: 14)
-        signalField.frame = NSRect(x: 55, y: cy, width: 44, height: 14)
+        deviationField.frame = NSRect(x: 4, y: cy, width: 58, height: 14)
+        signalField.frame = NSRect(x: 61, y: cy, width: 40, height: 14)
         toggleBtn.frame = NSRect(x: w - 16, y: cy, width: 12, height: 12)
     }
 
@@ -242,10 +242,10 @@ class FloatingContentView: NSView {
         } else {
             // 偏离度（颜色由正负决定）
             if state.deviationPercent >= 0 {
-                deviationField.stringValue = String(format: "+%.1f%%", state.deviationPercent)
+                deviationField.stringValue = String(format: "+%.2f%%", state.deviationPercent)
                 deviationField.textColor = NSColor.red
             } else {
-                deviationField.stringValue = String(format: "%.1f%%", state.deviationPercent)
+                deviationField.stringValue = String(format: "%.2f%%", state.deviationPercent)
                 deviationField.textColor = NSColor(calibratedRed: 0, green: 0.67, blue: 0, alpha: 1)
             }
 
