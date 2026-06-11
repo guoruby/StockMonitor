@@ -208,66 +208,109 @@ class MemoPanel: NSPanel {
         applyMarkdownAttributes(to: storage, lineText: lineText, lineRange: lineRange)
     }
 
-    /// 把渲染样式应用到指定行（不修改字符串长度）
-    /// Typora 体验：**xxx** → 整段加粗，但 ** 符号染成灰色
+    /// 把该行文本解析为带样式的 AttributedString，并替换原文本（去掉 MD 标记）
+    /// 关键：replaceCharacters 改字符串长度，但因为光标已在 \n 之后，不影响光标
     private func applyMarkdownAttributes(to storage: NSTextStorage, lineText: String, lineRange: NSRange) {
         guard lineRange.length > 0 else { return }
-        let baseFont = NSFont.systemFont(ofSize: 13)
-        let defaultColor = NSColor(calibratedRed: 0.2, green: 0.2, blue: 0.2, alpha: 1)
-        let markerColor = NSColor(calibratedWhite: 0.55, alpha: 1)
-
-        // 行级样式：标题
-        var font = baseFont
-        if lineText.hasPrefix("# ") {
-            font = NSFont.boldSystemFont(ofSize: 16)
-        } else if lineText.hasPrefix("## ") {
-            font = NSFont.boldSystemFont(ofSize: 14)
-        }
+        let attributed = renderMarkdownLine(lineText)
 
         isRendering = true
         storage.beginEditing()
-        // 重置行为默认
-        storage.setAttributes(
-            [.font: font, .foregroundColor: defaultColor],
-            range: lineRange
-        )
-
-        // 行内匹配 **xxx** / *xxx* / [red]xxx[/red] 等
-        let pattern = "(\\*\\*[^*]+\\*\\*)|(\\*(?:[^*])+\\*)|(\\[red\\][^\\[]+\\[/red\\])|(\\[green\\][^\\[]+\\[/green\\])|(\\[blue\\][^\\[]+\\[/blue\\])"
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
-            storage.endEditing()
-            isRendering = false
-            return
-        }
-        let nsLine = lineText as NSString
-        let matches = regex.matches(in: lineText, range: NSRange(location: 0, length: nsLine.length))
-
-        for match in matches {
-            let absRange = NSRange(location: lineRange.location + match.range.location, length: match.range.length)
-            let matched = nsLine.substring(with: match.range)
-            if matched.hasPrefix("**") && matched.hasSuffix("**") && matched.count >= 4 {
-                // **xxx** → 整段加粗，符号染灰
-                storage.addAttribute(.font, value: NSFont.boldSystemFont(ofSize: font.pointSize), range: absRange)
-                storage.addAttribute(.foregroundColor, value: markerColor, range: NSRange(location: absRange.location, length: 2))
-                storage.addAttribute(.foregroundColor, value: markerColor, range: NSRange(location: absRange.location + absRange.length - 2, length: 2))
-            } else if matched.hasPrefix("*") && matched.hasSuffix("*") && matched.count >= 2 {
-                // *xxx* → 整段斜体，符号染灰
-                let italicDesc = font.fontDescriptor.withSymbolicTraits(.italic)
-                let italicFont = NSFont(descriptor: italicDesc, size: font.pointSize) ?? font
-                storage.addAttribute(.font, value: italicFont, range: absRange)
-                storage.addAttribute(.foregroundColor, value: markerColor, range: NSRange(location: absRange.location, length: 1))
-                storage.addAttribute(.foregroundColor, value: markerColor, range: NSRange(location: absRange.location + absRange.length - 1, length: 1))
-            } else if matched.hasPrefix("[red]") {
-                storage.addAttribute(.foregroundColor, value: NSColor.red, range: absRange)
-            } else if matched.hasPrefix("[green]") {
-                storage.addAttribute(.foregroundColor, value: NSColor(calibratedRed: 0, green: 0.55, blue: 0, alpha: 1), range: absRange)
-            } else if matched.hasPrefix("[blue]") {
-                storage.addAttribute(.foregroundColor, value: NSColor.blue, range: absRange)
-            }
-        }
-
+        storage.replaceCharacters(in: lineRange, with: attributed)
         storage.endEditing()
         isRendering = false
+    }
+
+    /// 解析一行 Markdown 为 AttributedString
+    /// **xxx** / *xxx* / [red]xxx[/red] 等：去掉标记，应用样式
+    /// # / ## 标题：去掉前缀，整行加粗放大
+    private func renderMarkdownLine(_ line: String) -> NSAttributedString {
+        let baseFont = NSFont.systemFont(ofSize: 13)
+        let defaultColor = NSColor(calibratedRed: 0.2, green: 0.2, blue: 0.2, alpha: 1)
+        let nsLine = line as NSString
+        let totalLen = nsLine.length
+
+        // 行级：标题
+        var font = baseFont
+        var contentStart = 0
+        if line.hasPrefix("# ") {
+            font = NSFont.boldSystemFont(ofSize: 16)
+            contentStart = 2
+        } else if line.hasPrefix("## ") {
+            font = NSFont.boldSystemFont(ofSize: 14)
+            contentStart = 3
+        }
+
+        let result = NSMutableAttributedString()
+        let defaultAttrs: [NSAttributedString.Key: Any] = [
+            .font: font, .foregroundColor: defaultColor
+        ]
+
+        // 内联标记正则（捕获组用于提取内部文字）
+        let pattern = "\\*\\*([^*]+)\\*\\*|\\*([^*]+)\\*|\\[red\\]([^\\[]+)\\[/red\\]|\\[green\\]([^\\[]+)\\[/green\\]|\\[blue\\]([^\\[]+)\\[/blue\\]"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            let text = contentStart < totalLen ? nsLine.substring(from: contentStart) : ""
+            return NSAttributedString(string: text, attributes: defaultAttrs)
+        }
+
+        var cursor = contentStart
+        while cursor < totalLen {
+            let searchRange = NSRange(location: cursor, length: totalLen - cursor)
+            guard let match = regex.firstMatch(in: line, range: searchRange) else {
+                let rest = nsLine.substring(from: cursor)
+                result.append(NSAttributedString(string: rest, attributes: defaultAttrs))
+                break
+            }
+            // 匹配前的纯文本
+            if match.range.location > cursor {
+                let preText = nsLine.substring(
+                    with: NSRange(location: cursor, length: match.range.location - cursor)
+                )
+                result.append(NSAttributedString(string: preText, attributes: defaultAttrs))
+            }
+            // 匹配内容：去掉标记，保留内部文字
+            let matched = nsLine.substring(with: match.range)
+            if matched.hasPrefix("**") {
+                let inner = String(matched.dropFirst(2).dropLast(2))
+                result.append(NSAttributedString(string: inner, attributes: [
+                    .font: NSFont.boldSystemFont(ofSize: font.pointSize),
+                    .foregroundColor: defaultColor
+                ]))
+            } else if matched.hasPrefix("*") {
+                let inner = String(matched.dropFirst().dropLast())
+                let italicDesc = font.fontDescriptor.withSymbolicTraits(.italic)
+                let italicFont = NSFont(descriptor: italicDesc, size: font.pointSize) ?? font
+                result.append(NSAttributedString(string: inner, attributes: [
+                    .font: italicFont,
+                    .foregroundColor: defaultColor
+                ]))
+            } else if matched.hasPrefix("[red]") {
+                let inner = String(matched.dropFirst(5).dropLast(6))
+                result.append(NSAttributedString(string: inner, attributes: [
+                    .font: font,
+                    .foregroundColor: NSColor.red
+                ]))
+            } else if matched.hasPrefix("[green]") {
+                let inner = String(matched.dropFirst(7).dropLast(8))
+                result.append(NSAttributedString(string: inner, attributes: [
+                    .font: font,
+                    .foregroundColor: NSColor(calibratedRed: 0, green: 0.55, blue: 0, alpha: 1)
+                ]))
+            } else if matched.hasPrefix("[blue]") {
+                let inner = String(matched.dropFirst(6).dropLast(7))
+                result.append(NSAttributedString(string: inner, attributes: [
+                    .font: font,
+                    .foregroundColor: NSColor.blue
+                ]))
+            }
+            cursor = match.range.location + match.range.length
+        }
+
+        // 处理光标起始位置（标题前缀已被 contentStart 跳过）
+        if result.length == 0 && contentStart >= totalLen {
+            return NSAttributedString(string: "", attributes: defaultAttrs)
+        }
+        return result
     }
 
     /// 首屏渲染：对所有行应用样式（仅在初始化时调用一次）
