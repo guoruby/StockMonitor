@@ -306,7 +306,12 @@ class MemoPanel: NSPanel {
             cursor = match.range.location + match.range.length
         }
 
-        // 处理光标起始位置（标题前缀已被 contentStart 跳过）
+        // 处理标题前缀已被跳过、但没有内联标记的情况（如 `# 标题`）
+        if result.length == 0 && contentStart < totalLen {
+            let rest = nsLine.substring(from: contentStart)
+            result.append(NSAttributedString(string: rest, attributes: defaultAttrs))
+            return result
+        }
         if result.length == 0 && contentStart >= totalLen {
             return NSAttributedString(string: "", attributes: defaultAttrs)
         }
