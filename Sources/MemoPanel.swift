@@ -15,7 +15,7 @@ import Cocoa
 class MemoPanel: NSPanel {
     private let memoId: String
     private(set) var editView: MemoTextView!
-    private var previewView: NSTextView!
+    private var previewView: MemoTextView!
     private var editScroll: NSScrollView!
     private var previewScroll: NSScrollView!
     private var isClosing = false
@@ -111,7 +111,9 @@ class MemoPanel: NSPanel {
         previewScroll.autoresizingMask = [.width, .height]
 
         let pSize = previewScroll.contentSize
-        previewView = NSTextView(frame: NSRect(origin: .zero, size: pSize))
+        previewView = MemoTextView(frame: NSRect(origin: .zero, size: pSize))
+        previewView.isEditable = false
+        previewView.isPreviewMode = true
         previewView.font = NSFont.systemFont(ofSize: 13)
         previewView.textColor = NSColor(calibratedRed: 0.2, green: 0.2, blue: 0.2, alpha: 1)
         previewView.backgroundColor = .clear
@@ -402,7 +404,11 @@ class MemoTextView: NSTextView {
     weak var panel: MemoPanel?
     private var isCmdDragging = false
 
+    /// 预览态时忽略鼠标拖拽
+    var isPreviewMode: Bool = false
+
     override func mouseDown(with event: NSEvent) {
+        if isPreviewMode { return }
         if event.modifierFlags.contains(.command) {
             isCmdDragging = true
             panel?.beginCmdDrag(NSEvent.mouseLocation)
@@ -412,11 +418,13 @@ class MemoTextView: NSTextView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if isPreviewMode { return }
         if isCmdDragging { panel?.continueCmdDrag(NSEvent.mouseLocation) }
         else { super.mouseDragged(with: event) }
     }
 
     override func mouseUp(with event: NSEvent) {
+        if isPreviewMode { return }
         if isCmdDragging { isCmdDragging = false; panel?.endCmdDrag() }
         else { super.mouseUp(with: event) }
     }
