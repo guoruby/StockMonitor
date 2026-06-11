@@ -237,15 +237,15 @@ class MemoPanel: NSPanel {
         saveText()
         isInEditMode = false
         refreshPreview()
-        previewView.isHidden = false
-        editView.isHidden = true
+        previewScroll.isHidden = false
+        editScroll.isHidden = true
     }
 
     @objc private func windowDidBecomeKey(_ notification: Notification) {
         // 获得焦点：切回编辑视图
         isInEditMode = true
-        editView.isHidden = false
-        previewView.isHidden = true
+        editScroll.isHidden = false
+        previewScroll.isHidden = true
         editView.window?.makeFirstResponder(editView)
     }
 
