@@ -255,9 +255,9 @@ class MemoPanel: NSPanel {
 
     func showContextMenu(at point: NSPoint) {
         let menu = NSMenu()
-        let closeItem = NSMenuItem(title: "关闭便签", action: #selector(closeMemo), keyEquivalent: "")
-        closeItem.target = self
-        menu.addItem(closeItem)
+        let hideItem = NSMenuItem(title: "隐藏便签", action: #selector(hideMemo), keyEquivalent: "")
+        hideItem.target = self
+        menu.addItem(hideItem)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "--- 格式化语法（直接输入即可）---", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "**加粗文字**", action: nil, keyEquivalent: ""))
@@ -267,6 +267,17 @@ class MemoPanel: NSPanel {
         menu.addItem(NSMenuItem(title: "[blue]蓝色[/blue]", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "# 标题", action: nil, keyEquivalent: ""))
         menu.popUp(positioning: nil, at: point, in: nil)
+    }
+
+    // 隐藏便签（数据保留，可通过"显示便签"重新打开）
+    @objc func hideMemo() {
+        let f = contentRect(forFrameRect: self.frame)
+        MemoStore.shared.update(id: memoId, x: f.origin.x, y: f.origin.y,
+                                 width: f.width, height: f.height)
+        MemoStore.shared.update(id: memoId, text: textView.string)
+        isClosing = true
+        close()
+        NotificationCenter.default.post(name: .memoDidHide, object: nil, userInfo: ["id": memoId])
     }
 }
 
@@ -456,4 +467,5 @@ enum MarkdownRenderer {
 
 extension Notification.Name {
     static let memoDidClose = Notification.Name("memoDidClose")
+    static let memoDidHide = Notification.Name("memoDidHide")
 }

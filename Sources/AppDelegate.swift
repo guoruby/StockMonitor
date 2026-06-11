@@ -26,6 +26,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         NotificationCenter.default.addObserver(
+            forName: .memoDidHide, object: nil, queue: .main
+        ) { [weak self] notification in
+            if let id = notification.userInfo?["id"] as? String {
+                self?.memoPanels.removeValue(forKey: id)
+            }
+        }
+
+        NotificationCenter.default.addObserver(
             forName: .toggleMonitoring, object: nil, queue: .main
         ) { [weak self] _ in
             self?.floatingPanel?.toggleMonitoring()
@@ -67,6 +75,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusMenu.addItem(withTitle: "开始/停止监控", action: #selector(toggleMonitoring), keyEquivalent: "l")
         statusMenu.addItem(NSMenuItem.separator())
         statusMenu.addItem(withTitle: "新建便签", action: #selector(newMemo), keyEquivalent: "n")
+        statusMenu.addItem(withTitle: "显示所有便签", action: #selector(showAllMemos), keyEquivalent: "")
         statusMenu.addItem(NSMenuItem.separator())
         statusMenu.addItem(withTitle: "设置...", action: #selector(openSettings), keyEquivalent: ",")
         statusMenu.addItem(withTitle: "打开日志文件夹", action: #selector(openLogFolder), keyEquivalent: "")
@@ -129,6 +138,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func restoreMemos() {
         for memo in MemoStore.shared.memos {
             showMemoPanel(memo)
+        }
+    }
+
+    @objc private func showAllMemos() {
+        for memo in MemoStore.shared.memos {
+            if memoPanels[memo.id] == nil {
+                showMemoPanel(memo)
+            } else {
+                // 已经打开则提到最前
+                memoPanels[memo.id]?.orderFrontRegardless()
+            }
         }
     }
 
