@@ -2,7 +2,10 @@ import Cocoa
 
 class MemoPanel: NSPanel {
     private let memoId: String
+    private var scrollView: NSScrollView!
     private var textView: MemoTextView!
+    private var previewLabel: NSTextField!
+    var isEditing = true
     private var isClosing = false
     private var isCmdDragging = false
     private var cmdDragStartPos: NSPoint = .zero
@@ -18,6 +21,9 @@ class MemoPanel: NSPanel {
             defer: false
         )
 
+        // 关键修复：允许成为keyWindow才能输入文字
+        becomesKeyOnlyIfNeeded = false
+
         isFloatingPanel = true
         level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.floatingWindow)))
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -25,6 +31,7 @@ class MemoPanel: NSPanel {
         backgroundColor = .clear
         isReleasedWhenClosed = false
         hasShadow = true
+        acceptsMouseMovedEvents = true
 
         setupContent(memo: memo)
 
@@ -33,18 +40,23 @@ class MemoPanel: NSPanel {
         ) { [weak self] _ in self?.layoutSubviews() }
     }
 
+    // MARK: 必须 override 才能让 borderless window 成为 key
+
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+
     private func setupContent(memo: MemoItem) {
         let container = MemoContainerView(frame: NSRect(x: 0, y: 0, width: memo.width, height: memo.height))
         container.panel = self
 
-        let textContainer = NSTextContainer(containerSize: NSSize(width: memo.width - 12, height: .greatestFiniteMagnitude))
-        let layoutManager = NSLayoutManager()
-        layoutManager.addTextContainer(textContainer)
-        let textStorage = NSTextStorage()
-        textStorage.addLayoutManager(layoutManager)
+        // 编辑区（NSScrollView + NSTextView）
+        scrollView = NSScrollView(frame: NSRect(x: 6, y: 4, width: memo.width - 12, height: memo.height - 8))
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
 
-        textView = MemoTextView(frame: NSRect(x: 6, y: 4, width: memo.width - 12, height: memo.height - 8),
-                                textContainer: textContainer)
+        textView = MemoTextView()
         textView.string = memo.text
         textView.font = NSFont.systemFont(ofSize: 13)
         textView.textColor = NSColor(calibratedRed: 0.2, green: 0.2, blue: 0.2, alpha: 1)
@@ -53,15 +65,35 @@ class MemoPanel: NSPanel {
         textView.isFieldEditor = false
         textView.isRichText = false
         textView.allowsUndo = true
+        textView.isEditable = true
+        textView.isSelectable = true
         textView.insertionPointColor = NSColor(calibratedRed: 0.3, green: 0.3, blue: 0.3, alpha: 1)
         textView.delegate = self
-        textView.panel = self // 让textView能通知窗口拖拽
-        container.addSubview(textView)
+        textView.panel = self
+        textView.minSize = NSSize(width: 80, height: 40)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.containerSize = NSSize(width: memo.width - 24, height: .greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
+        scrollView.documentView = textView
+        container.addSubview(scrollView)
+
+        // 预览区（默认隐藏）
+        previewLabel = NSTextField(labelWithString: "")
+        previewLabel.font = NSFont.systemFont(ofSize: 13)
+        previewLabel.isEditable = false
+        previewLabel.isSelectable = false
+        previewLabel.drawsBackground = false
+        previewLabel.lineBreakMode = .byWordWrapping
+        previewLabel.isHidden = true
+        container.addSubview(previewLabel)
 
         contentView = container
     }
 
-    @objc private func closeMemo() {
+    @objc func closeMemo() {
         isClosing = true
         savePosition()
         saveText()
@@ -73,11 +105,8 @@ class MemoPanel: NSPanel {
     func savePosition() {
         guard !isClosing else { return }
         let frame = contentRect(forFrameRect: self.frame)
-        MemoStore.shared.update(
-            id: memoId,
-            x: frame.origin.x, y: frame.origin.y,
-            width: frame.width, height: frame.height
-        )
+        MemoStore.shared.update(id: memoId, x: frame.origin.x, y: frame.origin.y,
+                                 width: frame.width, height: frame.height)
     }
 
     func saveText() {
@@ -104,18 +133,73 @@ class MemoPanel: NSPanel {
         }
     }
 
+    // MARK: - 编辑/预览切换
+
+    func switchToPreview() {
+        guard isEditing else { return }
+        isEditing = false
+        saveText()
+        let rendered = MarkdownRenderer.render(textView.string)
+        previewLabel.attributedStringValue = rendered
+        previewLabel.frame = scrollView.frame
+        previewLabel.isHidden = false
+        scrollView.isHidden = true
+    }
+
+    func switchToEdit() {
+        guard !isEditing else { return }
+        isEditing = true
+        previewLabel.isHidden = true
+        scrollView.isHidden = false
+        makeKeyAndOrderFront(nil)
+        textView.window?.makeFirstResponder(textView)
+    }
+
     private func layoutSubviews() {
         guard let cv = contentView else { return }
         let w = cv.bounds.width
         let h = cv.bounds.height
-        textView.frame = NSRect(x: 6, y: 4, width: w - 12, height: h - 8)
+        scrollView.frame = NSRect(x: 6, y: 4, width: w - 12, height: h - 8)
+        if !isEditing {
+            previewLabel.frame = scrollView.frame
+        }
+        textView.textContainer?.containerSize = NSSize(width: w - 24, height: .greatestFiniteMagnitude)
     }
 
-    override func rightMouseDown(with event: NSEvent) {
-        let menu = NSMenu()
-        menu.addItem(withTitle: "关闭便签", action: #selector(closeMemo), keyEquivalent: "")
-        menu.addItem(NSMenuItem.separator())
-        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.command) {
+            isCmdDragging = true
+            cmdDragStartPos = NSEvent.mouseLocation
+            cmdDragStartFrameOrigin = frame.origin
+        } else if !isEditing {
+            switchToEdit()
+        } else {
+            super.mouseDown(with: event)
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        if isCmdDragging {
+            continueCmdDrag(NSEvent.mouseLocation)
+        } else {
+            super.mouseDragged(with: event)
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if isCmdDragging {
+            isCmdDragging = false
+            savePosition()
+        } else {
+            super.mouseUp(with: event)
+        }
+    }
+
+    override func resignMain() {
+        super.resignMain()
+        if !isClosing && isEditing {
+            switchToPreview()
+        }
     }
 }
 
@@ -146,20 +230,17 @@ class MemoContainerView: NSView {
         if event.modifierFlags.contains(.command) {
             isCmdDragging = true
             panel?.beginCmdDrag(NSEvent.mouseLocation)
+        } else if !(panel?.isEditing ?? true) {
+            panel?.switchToEdit()
         }
     }
 
     override func mouseDragged(with event: NSEvent) {
-        if isCmdDragging {
-            panel?.continueCmdDrag(NSEvent.mouseLocation)
-        }
+        if isCmdDragging { panel?.continueCmdDrag(NSEvent.mouseLocation) }
     }
 
     override func mouseUp(with event: NSEvent) {
-        if isCmdDragging {
-            isCmdDragging = false
-            panel?.endCmdDrag()
-        }
+        if isCmdDragging { isCmdDragging = false; panel?.endCmdDrag() }
     }
 }
 
@@ -195,11 +276,148 @@ class MemoTextView: NSTextView {
         }
     }
 
+    // 右键菜单：关闭 + 格式化帮助
+    override func rightMouseDown(with event: NSEvent) {
+        let menu = NSMenu()
+
+        let closeItem = menu.addItem(withTitle: "关闭便签", action: #selector(panel?.closeMemo), keyEquivalent: "")
+        closeItem.target = panel
+        menu.addItem(NSMenuItem.separator())
+
+        menu.addItem(withTitle: "--- 格式化语法 ---", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "**加粗文字**", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "*斜体文字*", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "[red]红色文字[/red]", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "[green]绿色文字[/green]", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "[blue]蓝色文字[/blue]", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "# 标题", action: nil, keyEquivalent: "")
+
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "a" {
             return super.performKeyEquivalent(with: event)
         }
+        // Cmd+Enter 切换到预览
+        if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "\r" {
+            panel?.switchToPreview()
+            return true
+        }
         return false
+    }
+}
+
+// MARK: - Markdown 渲染器
+
+enum MarkdownRenderer {
+    static func render(_ text: String) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        let lines = text.components(separatedBy: "\n")
+        let baseFont = NSFont.systemFont(ofSize: 13)
+        let defaultColor = NSColor(calibratedRed: 0.2, green: 0.2, blue: 0.2, alpha: 1)
+
+        for (i, line) in lines.enumerated() {
+            if i > 0 { result.append(NSAttributedString(string: "\n")) }
+            result.append(renderLine(line, baseFont: baseFont, defaultColor: defaultColor))
+        }
+        return result
+    }
+
+    private static func renderLine(_ line: String, baseFont: NSFont, defaultColor: NSColor) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+
+        // 处理标题 #
+        var remaining = line
+        var font = baseFont
+        if remaining.hasPrefix("# ") {
+            font = NSFont.boldSystemFont(ofSize: 16)
+            remaining = String(remaining.dropFirst(2))
+        } else if remaining.hasPrefix("## ") {
+            font = NSFont.boldSystemFont(ofSize: 14)
+            remaining = String(remaining.dropFirst(3))
+        }
+
+        // 正则匹配所有标记
+        let pattern = "(\\*\\*[^*]+\\*\\*)|(\\*[^*]+\\*)|(\\[red\\]\\[/red\\])|(\\[red\\][^\\[]+\\[/red\\])|(\\[green\\]\\[/green\\])|(\\[green\\][^\\[]+\\[/green\\])|(\\[blue\\]\\[/blue\\])|(\\[blue\\][^\\[]+\\[/blue\\])"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return NSAttributedString(string: remaining, attributes: [.font: font, .foregroundColor: defaultColor])
+        }
+
+        let nsLine = remaining as NSString
+        let matches = regex.matches(in: remaining, range: NSRange(location: 0, length: nsLine.length))
+        var lastEnd = 0
+
+        for match in matches {
+            // 前面的普通文本
+            if match.range.location > lastEnd {
+                let plain = nsLine.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
+                result.append(NSAttributedString(string: plain, attributes: [.font: font, .foregroundColor: defaultColor]))
+            }
+
+            let matched = nsLine.substring(with: match.range)
+
+            if matched.hasPrefix("**") && matched.hasSuffix("**") {
+                // 加粗
+                let inner = String(matched.dropFirst(2).dropLast(2))
+                result.append(NSAttributedString(string: inner, attributes: [
+                    .font: NSFont.boldSystemFont(ofSize: font.pointSize),
+                    .foregroundColor: defaultColor
+                ]))
+            } else if matched.hasPrefix("*") && matched.hasSuffix("*") {
+                // 斜体
+                let inner = String(matched.dropFirst().dropLast())
+                let italicDesc = font.fontDescriptor.withSymbolicTraits(.italic)
+                let italicFont = NSFont(descriptor: italicDesc, size: font.pointSize) ?? font
+                result.append(NSAttributedString(string: inner, attributes: [
+                    .font: italicFont,
+                    .foregroundColor: defaultColor
+                ]))
+            } else if matched.hasPrefix("[red]") {
+                let inner: String
+                if matched == "[red][/red]" {
+                    inner = ""
+                } else {
+                    inner = String(matched.dropFirst(5).dropLast(6))
+                }
+                result.append(NSAttributedString(string: inner, attributes: [
+                    .font: font,
+                    .foregroundColor: NSColor.red
+                ]))
+            } else if matched.hasPrefix("[green]") {
+                let inner: String
+                if matched == "[green][/green]" {
+                    inner = ""
+                } else {
+                    inner = String(matched.dropFirst(7).dropLast(8))
+                }
+                result.append(NSAttributedString(string: inner, attributes: [
+                    .font: font,
+                    .foregroundColor: NSColor(calibratedRed: 0, green: 0.55, blue: 0, alpha: 1)
+                ]))
+            } else if matched.hasPrefix("[blue]") {
+                let inner: String
+                if matched == "[blue][/blue]" {
+                    inner = ""
+                } else {
+                    inner = String(matched.dropFirst(6).dropLast(7))
+                }
+                result.append(NSAttributedString(string: inner, attributes: [
+                    .font: font,
+                    .foregroundColor: NSColor.blue
+                ]))
+            }
+
+            lastEnd = match.range.location + match.range.length
+        }
+
+        // 尾部剩余文本
+        if lastEnd < nsLine.length {
+            let tail = nsLine.substring(from: lastEnd)
+            result.append(NSAttributedString(string: tail, attributes: [.font: font, .foregroundColor: defaultColor]))
+        }
+
+        return result
     }
 }
 
