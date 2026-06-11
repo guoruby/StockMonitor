@@ -2,21 +2,20 @@ import Cocoa
 
 // MARK: - 便签窗口
 //
-// 设计：双 NSTextView 叠加
-// - editView: 负责编辑，始终显示 rawText（包含 Markdown 标记）
-// - previewView: 负责预览，显示渲染后的内容（标记去除 + 样式应用）
-// - 编辑时（keyWindow）显示 editView，隐藏 previewView
-// - 失焦时隐藏 editView，显示 previewView
-// 两个 view 互不干扰，彻底解决 setAttributedString 在编辑时触发的各种问题
+// 设计：Typora 风格 - 边输边渲染
+// - 单一 NSTextView，isRichText = true
+// - 用户输入时立即把当前段落重新渲染（去掉标记、应用样式）
+// - 渲染使用 NSMutableAttributedString 替换，不影响光标定位（在同一行内操作）
+// - 为了避免崩溃，渲染只针对"当前段"（光标所在段），不影响其他段
 
 class MemoPanel: NSPanel {
     private let memoId: String
     private(set) var editView: MemoTextView!
-    private var previewView: NSTextView!
     private var isClosing = false
     private var isCmdDragging = false
     private var cmdDragStartPos: NSPoint = .zero
     private var cmdDragStartFrameOrigin: NSPoint = .zero
+    private var isRendering = false  // 防止渲染过程触发自身
 
     init(memo: MemoItem) {
         self.memoId = memo.id
@@ -39,20 +38,8 @@ class MemoPanel: NSPanel {
         hasShadow = true
 
         setupContent(text: memo.text)
-
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.didResizeNotification, object: self, queue: .main
-        ) { [weak self] _ in self?.layoutSubviews() }
-
-        // 失焦 → 切到预览
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.didResignKeyNotification, object: self, queue: .main
-        ) { [weak self] _ in self?.showPreview() }
-
-        // 聚焦 → 切到编辑
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.didBecomeKeyNotification, object: self, queue: .main
-        ) { [weak self] _ in self?.showEditor() }
+        // 首屏渲染：对所有行应用样式
+        renderAllLinesOnOpen()
     }
 
     override var canBecomeKey: Bool { true }
@@ -63,8 +50,6 @@ class MemoPanel: NSPanel {
         container.panel = self
 
         let tvFrame = NSRect(x: 6, y: 4, width: 188, height: 142)
-
-        // 1. 编辑层
         editView = MemoTextView(frame: tvFrame)
         editView.font = NSFont.systemFont(ofSize: 13)
         editView.textColor = NSColor(calibratedRed: 0.2, green: 0.2, blue: 0.2, alpha: 1)
@@ -72,7 +57,7 @@ class MemoPanel: NSPanel {
         editView.drawsBackground = false
         editView.isEditable = true
         editView.isSelectable = true
-        editView.isRichText = false
+        editView.isRichText = true  // 必须 true 才能显示加粗/颜色
         editView.isFieldEditor = false
         editView.allowsUndo = true
         editView.insertionPointColor = NSColor(calibratedRed: 0.3, green: 0.3, blue: 0.3, alpha: 1)
@@ -83,43 +68,16 @@ class MemoPanel: NSPanel {
         editView.autoresizingMask = [.width, .height]
         editView.textContainer?.containerSize = NSSize(width: tvFrame.width, height: CGFloat.greatestFiniteMagnitude)
         editView.textContainer?.widthTracksTextView = true
+        editView.textStorage?.delegate = self
+        // 初始显示原始文本
         editView.string = text
         container.addSubview(editView)
 
-        // 2. 预览层（覆盖在编辑层上，失焦时显示）
-        previewView = NSTextView(frame: tvFrame)
-        previewView.font = NSFont.systemFont(ofSize: 13)
-        previewView.textColor = NSColor(calibratedRed: 0.2, green: 0.2, blue: 0.2, alpha: 1)
-        previewView.backgroundColor = .clear
-        previewView.drawsBackground = false
-        previewView.isEditable = false
-        previewView.isSelectable = true
-        previewView.isRichText = true
-        previewView.isFieldEditor = false
-        previewView.isVerticallyResizable = true
-        previewView.isHorizontallyResizable = false
-        previewView.autoresizingMask = [.width, .height]
-        previewView.textContainer?.containerSize = NSSize(width: tvFrame.width, height: CGFloat.greatestFiniteMagnitude)
-        previewView.textContainer?.widthTracksTextView = true
-        previewView.isHidden = true
-        container.addSubview(previewView)
-
         contentView = container
-    }
 
-    // MARK: - 编辑/预览切换
-
-    private func showEditor() {
-        editView.isHidden = false
-        previewView.isHidden = true
-    }
-
-    private func showPreview() {
-        // 同步 editView 内容到 previewView（渲染版）
-        let rendered = MarkdownRenderer.render(editView.string)
-        previewView.textStorage?.setAttributedString(rendered)
-        editView.isHidden = true
-        previewView.isHidden = false
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification, object: self, queue: .main
+        ) { [weak self] _ in self?.layoutSubviews() }
     }
 
     // MARK: - 保存
@@ -131,8 +89,11 @@ class MemoPanel: NSPanel {
                                  width: f.width, height: f.height)
     }
 
+    /// 保存当前内容（保留 Markdown 标记）
+    /// editView.string 没有被修改字符串长度，只改样式，所以直接取 string 即可
     func saveText() {
-        MemoStore.shared.update(id: memoId, text: editView.string)
+        let text = (editView.string as String)
+        MemoStore.shared.update(id: memoId, text: text)
     }
 
     func beginCmdDrag(_ pos: NSPoint) {
@@ -157,11 +118,8 @@ class MemoPanel: NSPanel {
         guard let cv = contentView else { return }
         let w = cv.bounds.width
         let h = cv.bounds.height
-        let f = NSRect(x: 6, y: 4, width: w - 12, height: h - 8)
-        editView.frame = f
-        previewView.frame = f
+        editView.frame = NSRect(x: 6, y: 4, width: w - 12, height: h - 8)
         editView.textContainer?.containerSize = NSSize(width: w - 18, height: CGFloat.greatestFiniteMagnitude)
-        previewView.textContainer?.containerSize = NSSize(width: w - 18, height: CGFloat.greatestFiniteMagnitude)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -208,18 +166,147 @@ class MemoPanel: NSPanel {
         let f = contentRect(forFrameRect: self.frame)
         MemoStore.shared.update(id: memoId, x: f.origin.x, y: f.origin.y,
                                  width: f.width, height: f.height)
-        MemoStore.shared.update(id: memoId, text: editView.string)
+        saveText()
         isClosing = true
         close()
         NotificationCenter.default.post(name: .memoDidHide, object: nil, userInfo: ["id": memoId])
     }
+
+    // MARK: - Typora 风格：换行实时渲染
+
+    /// 触发时机：用户按回车（textStorage 出现 \n）
+    /// 行为：只渲染"刚结束的那一行"（\n 之前），当前行（光标所在）保持编辑态
+    /// 策略：只改样式不改字符串，** 符号保留但染灰，模拟 Typora 体验
+    private func handleTextChange() {
+        guard !isRendering else { return }
+        guard let storage = editView.textStorage else { return }
+
+        // 检测本次编辑是否插入了 \n
+        let editedRange = storage.editedRange
+        guard editedRange.location != NSNotFound, editedRange.length > 0 else { return }
+        let nsString = storage.string as NSString
+        let editedText = nsString.substring(with: editedRange)
+        guard editedText.contains("\n") else { return }
+
+        // 找到 \n 之前的那一行（即刚刚编辑完成、用户已离开的行）
+        // 多次按回车：渲染最后一个 \n 之前的内容
+        let lastNewlineRange = nsString.range(of: "\n", options: .backwards)
+        guard lastNewlineRange.location != NSNotFound else { return }
+        let beforeNewline = NSRange(location: 0, length: lastNewlineRange.location)
+        var lineRange = nsString.lineRange(for: beforeNewline)
+        // lineRange 可能含前导 \n，去掉
+        if lineRange.length > 0 {
+            let firstCharLoc = lineRange.location
+            if firstCharLoc < nsString.length, nsString.substring(with: NSRange(location: firstCharLoc, length: 1)) == "\n" {
+                lineRange.location += 1
+                lineRange.length -= 1
+            }
+        }
+        guard lineRange.length > 0 else { return }
+
+        let lineText = nsString.substring(with: lineRange)
+        applyMarkdownAttributes(to: storage, lineText: lineText, lineRange: lineRange)
+    }
+
+    /// 把渲染样式应用到指定行（不修改字符串长度）
+    /// Typora 体验：**xxx** → 整段加粗，但 ** 符号染成灰色
+    private func applyMarkdownAttributes(to storage: NSTextStorage, lineText: String, lineRange: NSRange) {
+        guard lineRange.length > 0 else { return }
+        let baseFont = NSFont.systemFont(ofSize: 13)
+        let defaultColor = NSColor(calibratedRed: 0.2, green: 0.2, blue: 0.2, alpha: 1)
+        let markerColor = NSColor(calibratedWhite: 0.55, alpha: 1)
+
+        // 行级样式：标题
+        var font = baseFont
+        if lineText.hasPrefix("# ") {
+            font = NSFont.boldSystemFont(ofSize: 16)
+        } else if lineText.hasPrefix("## ") {
+            font = NSFont.boldSystemFont(ofSize: 14)
+        }
+
+        isRendering = true
+        storage.beginEditing()
+        // 重置行为默认
+        storage.setAttributes(
+            [.font: font, .foregroundColor: defaultColor],
+            range: lineRange
+        )
+
+        // 行内匹配 **xxx** / *xxx* / [red]xxx[/red] 等
+        let pattern = "(\\*\\*[^*]+\\*\\*)|(\\*(?:[^*])+\\*)|(\\[red\\][^\\[]+\\[/red\\])|(\\[green\\][^\\[]+\\[/green\\])|(\\[blue\\][^\\[]+\\[/blue\\])"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            storage.endEditing()
+            isRendering = false
+            return
+        }
+        let nsLine = lineText as NSString
+        let matches = regex.matches(in: lineText, range: NSRange(location: 0, length: nsLine.length))
+
+        for match in matches {
+            let absRange = NSRange(location: lineRange.location + match.range.location, length: match.range.length)
+            let matched = nsLine.substring(with: match.range)
+            if matched.hasPrefix("**") && matched.hasSuffix("**") && matched.count >= 4 {
+                // **xxx** → 整段加粗，符号染灰
+                storage.addAttribute(.font, value: NSFont.boldSystemFont(ofSize: font.pointSize), range: absRange)
+                storage.addAttribute(.foregroundColor, value: markerColor, range: NSRange(location: absRange.location, length: 2))
+                storage.addAttribute(.foregroundColor, value: markerColor, range: NSRange(location: absRange.location + absRange.length - 2, length: 2))
+            } else if matched.hasPrefix("*") && matched.hasSuffix("*") && matched.count >= 2 {
+                // *xxx* → 整段斜体，符号染灰
+                let italicDesc = font.fontDescriptor.withSymbolicTraits(.italic)
+                let italicFont = NSFont(descriptor: italicDesc, size: font.pointSize) ?? font
+                storage.addAttribute(.font, value: italicFont, range: absRange)
+                storage.addAttribute(.foregroundColor, value: markerColor, range: NSRange(location: absRange.location, length: 1))
+                storage.addAttribute(.foregroundColor, value: markerColor, range: NSRange(location: absRange.location + absRange.length - 1, length: 1))
+            } else if matched.hasPrefix("[red]") {
+                storage.addAttribute(.foregroundColor, value: NSColor.red, range: absRange)
+            } else if matched.hasPrefix("[green]") {
+                storage.addAttribute(.foregroundColor, value: NSColor(calibratedRed: 0, green: 0.55, blue: 0, alpha: 1), range: absRange)
+            } else if matched.hasPrefix("[blue]") {
+                storage.addAttribute(.foregroundColor, value: NSColor.blue, range: absRange)
+            }
+        }
+
+        storage.endEditing()
+        isRendering = false
+    }
+
+    /// 首屏渲染：对所有行应用样式（仅在初始化时调用一次）
+    private func renderAllLinesOnOpen() {
+        guard let storage = editView.textStorage else { return }
+        let plain = storage.string as NSString
+        var searchStart = 0
+        let fullLength = plain.length
+        while searchStart < fullLength {
+            let restRange = NSRange(location: searchStart, length: fullLength - searchStart)
+            let lineRange = plain.lineRange(for: restRange)
+            if lineRange.length == 0 { break }
+            let lineText = plain.substring(with: lineRange)
+            applyMarkdownAttributes(to: storage, lineText: lineText, lineRange: lineRange)
+            searchStart = lineRange.location + lineRange.length
+        }
+    }
 }
 
-// MARK: - Delegate
+// MARK: - NSTextViewDelegate
 
 extension MemoPanel: NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
         saveText()
+    }
+}
+
+// MARK: - NSTextStorageDelegate (Typora 风格实时渲染)
+
+extension MemoPanel: NSTextStorageDelegate {
+    override func textStorageDidProcessEditing(_ notification: Notification) {
+        // 只在用户实际编辑时触发，不在 setAttributedString 渲染时触发
+        guard !isRendering else { return }
+        let storage = editView.textStorage
+        guard let storage = storage else { return }
+        // editedMask: .editedCharacters 表示用户输入了字符
+        if storage.editedMask.contains(.editedCharacters) {
+            handleTextChange()
+        }
     }
 }
 
@@ -257,7 +344,7 @@ class MemoContainerView: NSView {
     }
 }
 
-// MARK: - TextView (编辑层)
+// MARK: - TextView
 
 class MemoTextView: NSTextView {
     weak var panel: MemoPanel?
@@ -291,108 +378,6 @@ class MemoTextView: NSTextView {
             return super.performKeyEquivalent(with: event)
         }
         return false
-    }
-}
-
-// MARK: - Markdown 渲染器（完整版：去掉标记，生成纯渲染结果）
-
-enum MarkdownRenderer {
-    /// 渲染整段文本为带样式的 AttributedString（用于预览层）
-    /// 渲染过程中会去掉所有 Markdown 标记符号（**、*、[red] 等）
-    static func render(_ text: String) -> NSAttributedString {
-        let result = NSMutableAttributedString()
-        let baseFont = NSFont.systemFont(ofSize: 13)
-        let defaultColor = NSColor(calibratedRed: 0.2, green: 0.2, blue: 0.2, alpha: 1)
-        let lines = text.components(separatedBy: "\n")
-
-        for (i, line) in lines.enumerated() {
-            if i > 0 { result.append(NSAttributedString(string: "\n")) }
-            result.append(renderLine(line, baseFont: baseFont, defaultColor: defaultColor))
-        }
-        return result
-    }
-
-    private static func renderLine(_ line: String, baseFont: NSFont, defaultColor: NSColor) -> NSAttributedString {
-        var remaining = line
-        var font = baseFont
-
-        // 标题 # / ##
-        if remaining.hasPrefix("# ") {
-            font = NSFont.boldSystemFont(ofSize: 16)
-            remaining = String(remaining.dropFirst(2))
-        } else if remaining.hasPrefix("## ") {
-            font = NSFont.boldSystemFont(ofSize: 14)
-            remaining = String(remaining.dropFirst(3))
-        }
-
-        let nsRemaining = remaining as NSString
-        let pattern = "(\\*\\*[^*]+\\*\\*)|(\\*[^*]+\\*)|(\\[red\\][^\\[]+\\[/red\\])|(\\[green\\][^\\[]+\\[/green\\])|(\\[blue\\][^\\[]+\\[/blue\\])"
-
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
-            return NSAttributedString(string: remaining, attributes: [.font: font, .foregroundColor: defaultColor])
-        }
-
-        let matches = regex.matches(in: remaining, range: NSRange(location: 0, length: nsRemaining.length))
-        let result = NSMutableAttributedString()
-        var lastEnd = 0
-
-        for match in matches {
-            if match.range.location > lastEnd {
-                let plain = nsRemaining.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
-                result.append(NSAttributedString(string: plain, attributes: [.font: font, .foregroundColor: defaultColor]))
-            }
-
-            let matched = nsRemaining.substring(with: match.range)
-
-            if matched.hasPrefix("**") && matched.hasSuffix("**") {
-                let inner = String(matched.dropFirst(2).dropLast(2))
-                result.append(NSAttributedString(string: inner, attributes: [
-                    .font: NSFont.boldSystemFont(ofSize: font.pointSize),
-                    .foregroundColor: defaultColor
-                ]))
-            } else if matched.hasPrefix("*") && matched.hasSuffix("*") && matched.count > 2 {
-                let inner = String(matched.dropFirst().dropLast())
-                let italicDesc = font.fontDescriptor.withSymbolicTraits(.italic)
-                let italicFont = NSFont(descriptor: italicDesc, size: font.pointSize) ?? font
-                result.append(NSAttributedString(string: inner, attributes: [
-                    .font: italicFont,
-                    .foregroundColor: defaultColor
-                ]))
-            } else if matched.hasPrefix("[red]") {
-                let inner: String
-                if matched == "[red][/red]" { inner = "" }
-                else { inner = String(matched.dropFirst(5).dropLast(6)) }
-                result.append(NSAttributedString(string: inner, attributes: [
-                    .font: font,
-                    .foregroundColor: NSColor.red
-                ]))
-            } else if matched.hasPrefix("[green]") {
-                let inner: String
-                if matched == "[green][/green]" { inner = "" }
-                else { inner = String(matched.dropFirst(7).dropLast(8)) }
-                result.append(NSAttributedString(string: inner, attributes: [
-                    .font: font,
-                    .foregroundColor: NSColor(calibratedRed: 0, green: 0.55, blue: 0, alpha: 1)
-                ]))
-            } else if matched.hasPrefix("[blue]") {
-                let inner: String
-                if matched == "[blue][/blue]" { inner = "" }
-                else { inner = String(matched.dropFirst(6).dropLast(7)) }
-                result.append(NSAttributedString(string: inner, attributes: [
-                    .font: font,
-                    .foregroundColor: NSColor.blue
-                ]))
-            }
-
-            lastEnd = match.range.location + match.range.length
-        }
-
-        if lastEnd < nsRemaining.length {
-            let tail = nsRemaining.substring(from: lastEnd)
-            result.append(NSAttributedString(string: tail, attributes: [.font: font, .foregroundColor: defaultColor]))
-        }
-
-        return result
     }
 }
 
