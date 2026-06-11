@@ -77,6 +77,7 @@ class MemoPanel: NSPanel {
                 .foregroundColor: NSColor(calibratedRed: 0.2, green: 0.2, blue: 0.2, alpha: 1)
             ]
         ))
+        isInitializing = false
     }
 
     @objc func closeMemo() {
@@ -119,11 +120,11 @@ class MemoPanel: NSPanel {
 
     // MARK: - 逐行渲染：当前行编辑（显示标记），其他行预览（隐藏标记，显示效果）
 
+    private var isInitializing = true
+
     /// 获取光标在 rawText 中的位置对应的行号
     private func currentLineIndex() -> Int {
         let cursorPos = textView.selectedRange.location
-        // 将光标位置映射回 rawText 中的位置
-        // 简化处理：因为当前行的内容=rawText对应行，直接在rawText中计算
         let lines = rawText.components(separatedBy: "\n")
         var charOffset = 0
         for (idx, line) in lines.enumerated() {
@@ -137,6 +138,7 @@ class MemoPanel: NSPanel {
     }
 
     func renderPerLine() {
+        guard !isInitializing else { return }
         guard let storage = textView.textStorage else { return }
 
         let currentLine = currentLineIndex()
@@ -151,25 +153,25 @@ class MemoPanel: NSPanel {
             if idx > 0 { result.append(NSAttributedString(string: "\n")) }
 
             if idx == currentLine {
-                // 当前行：纯文本，保留 Markdown 标记供编辑
                 result.append(NSAttributedString(string: line, attributes: [
                     .font: baseFont,
                     .foregroundColor: defaultColor
                 ]))
             } else {
-                // 其他行：渲染 Markdown（去掉标记符号，应用样式）
                 result.append(renderMarkdownLine(line, baseFont: baseFont, defaultColor: defaultColor))
             }
         }
 
-        // 保存当前光标位置（相对于当前行，内容一致所以偏移有效）
+        // 保存当前光标位置
         let selectedRanges = textView.selectedRanges
 
+        // 防止 setAttributedString 触发 delegate 回调导致递归
+        isInitializing = true
         storage.beginEditing()
         storage.setAttributedString(result)
         storage.endEditing()
+        isInitializing = false
 
-        // 恢复选中范围
         textView.selectedRanges = selectedRanges
     }
 
@@ -334,7 +336,7 @@ extension MemoPanel: NSTextViewDelegate {
 
     // 光标移动 → 切换当前行，重新渲染
     func textViewDidChangeSelection(_ notification: Notification) {
-        // 先同步旧当前行的修改到 rawText，再切换渲染
+        guard !isInitializing else { return }
         renderPerLine()
     }
 
