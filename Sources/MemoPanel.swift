@@ -14,11 +14,7 @@ class MemoPanel: NSPanel {
     private var editScroll: NSScrollView!
     private var previewScroll: NSScrollView!
     private var isClosing = false
-
-    /// 当前是否处于编辑态（false = 预览态）
     private var isInEditMode = false
-    /// 首次展示标记：防止 makeKeyAndOrderFront 触发 didBecomeKey 时自动切到编辑态
-    private var isInitialDisplay = true
 
     init(memo: MemoItem) {
         self.memoId = memo.id
@@ -52,8 +48,10 @@ class MemoPanel: NSPanel {
             name: NSWindow.didResignKeyNotification, object: self
         )
 
-        // 默认以预览态展示
-        switchToPreview()
+        // 初始即为预览态：editScroll 隐藏，previewScroll 显示
+        refreshPreview()
+        editScroll.isHidden = true
+        previewScroll.isHidden = false
     }
 
     deinit {
@@ -133,13 +131,16 @@ class MemoPanel: NSPanel {
 
         contentView = container
 
+        // 添加 Cmd+拖拽手势识别器到 contentView
+        let dragGesture = MemoDragGestureRecognizer(target: self, action: #selector(handleDragGesture(_:)))
+        container.addGestureRecognizer(dragGesture)
+
         NotificationCenter.default.addObserver(
             forName: NSWindow.didResizeNotification, object: self, queue: .main
         ) { [weak self] _ in self?.layoutSubviews() }
     }
 
     /// 构建右键菜单并挂载到所有可交互视图上
-    /// 使用 NSView.menu 属性是最可靠的方式——系统原生支持右键弹出
     private func buildContextMenu() {
         let menu = NSMenu()
         let hideItem = NSMenuItem(title: "隐藏便签", action: #selector(hideMemo), keyEquivalent: "")
@@ -154,7 +155,6 @@ class MemoPanel: NSPanel {
         menu.addItem(NSMenuItem(title: "[blue]蓝色[/blue]", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "# 标题", action: nil, keyEquivalent: ""))
 
-        // 挂载到 scrollView 和 textView 上（确保无论哪个层级拦截都能触发）
         editScroll.menu = menu
         editView.menu = menu
         previewScroll.menu = menu
@@ -175,53 +175,40 @@ class MemoPanel: NSPanel {
         MemoStore.shared.update(id: memoId, text: text)
     }
 
-    // MARK: - 拖拽
-
     private func layoutSubviews() {
-        // scrollView autoresizingMask=[.width,.height] 自动跟随 contentView
+        // scrollView autoresizingMask 自动跟随 contentView
     }
 
-    // MARK: - Panel 鼠标事件（Cmd+拖拽移动窗口）
+    // MARK: - Cmd+拖拽
 
-    /// 使用 modal event tracking loop 捕获拖拽事件
-    /// 不调用 super.mouseDown 的话，系统不会自动分发 mouseDragged/mouseUp
-    /// 必须手动用 nextEvent 循环读取
-    override func mouseDown(with event: NSEvent) {
-        if event.modifierFlags.contains(.command) {
-            let startPos = NSEvent.mouseLocation
-            let startFrame = frame.origin
-            var keepTracking = true
-            while keepTracking {
-                guard let nextEvent = nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) else {
-                    break
-                }
-                switch nextEvent.type {
-                case .leftMouseDragged:
-                    let currentPos = NSEvent.mouseLocation
-                    setFrameOrigin(NSPoint(
-                        x: startFrame.x + (currentPos.x - startPos.x),
-                        y: startFrame.y + (currentPos.y - startPos.y)
-                    ))
-                case .leftMouseUp:
-                    savePosition()
-                    keepTracking = false
-                default:
-                    keepTracking = false
-                }
-            }
-        } else {
-            super.mouseDown(with: event)
+    private var dragStartPos = NSPoint.zero
+    private var dragStartFrameOrigin = NSPoint.zero
+
+    @objc private func handleDragGesture(_ gesture: MemoDragGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            dragStartPos = NSEvent.mouseLocation
+            dragStartFrameOrigin = frame.origin
+        case .changed:
+            let currentPos = NSEvent.mouseLocation
+            setFrameOrigin(NSPoint(
+                x: dragStartFrameOrigin.x + (currentPos.x - dragStartPos.x),
+                y: dragStartFrameOrigin.y + (currentPos.y - dragStartPos.y)
+            ))
+        case .ended:
+            savePosition()
+        default:
+            break
         }
     }
 
-    // MARK: - 右键菜单（fallback，menu 属性已覆盖大部分情况）
+    // MARK: - 右键菜单
 
     override func rightMouseDown(with event: NSEvent) {
         showContextMenu(at: NSEvent.mouseLocation)
     }
 
     func showContextMenu(at point: NSPoint) {
-        // 如果已有 menu 属性，系统会自动弹出；这里作为 fallback 手动弹出
         let menu = NSMenu()
         let hideItem = NSMenuItem(title: "隐藏便签", action: #selector(hideMemo), keyEquivalent: "")
         hideItem.target = self
@@ -254,11 +241,6 @@ class MemoPanel: NSPanel {
     }
 
     @objc private func windowDidBecomeKey(_ notification: Notification) {
-        // 首次展示时保持预览态，不自动切换
-        if isInitialDisplay {
-            isInitialDisplay = false
-            return
-        }
         switchToEdit()
     }
 
@@ -279,7 +261,6 @@ class MemoPanel: NSPanel {
         editView.window?.makeFirstResponder(editView)
     }
 
-    /// 从 editView 取最新文本，渲染成富文本，填充到 previewView
     private func refreshPreview() {
         let raw = (editView.string as String)
         previewView.textStorage?.setAttributedString(renderMarkdown(raw))
@@ -407,71 +388,20 @@ class MemoContainerView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        if event.modifierFlags.contains(.command) {
-            // Cmd+拖拽：用 modal tracking loop 手动捕获事件
-            let startPos = NSEvent.mouseLocation
-            let startFrame = panel?.frame.origin ?? .zero
-            var keepTracking = true
-            while keepTracking {
-                guard let nextEvent = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) else {
-                    break
-                }
-                switch nextEvent.type {
-                case .leftMouseDragged:
-                    let currentPos = NSEvent.mouseLocation
-                    panel?.setFrameOrigin(NSPoint(
-                        x: startFrame.x + (currentPos.x - startPos.x),
-                        y: startFrame.y + (currentPos.y - startPos.y)
-                    ))
-                case .leftMouseUp:
-                    panel?.savePosition()
-                    keepTracking = false
-                default:
-                    keepTracking = false
-                }
-            }
-        } else {
-            // 点击空白区域 → 进入编辑态
+        // 非Cmd点击 → 进入编辑态
+        if !event.modifierFlags.contains(.command) {
             panel?.makeKeyAndOrderFront(nil)
             panel?.editView.window?.makeFirstResponder(panel?.editView)
         }
+        // Cmd+点击拖拽由手势识别器处理，这里不拦截
+        super.mouseDown(with: event)
     }
 }
 
 // MARK: - TextView
 
-/// 编辑态专用 TextView：只负责文本输入，不做任何特殊拦截
 class MemoTextView: NSTextView {
     weak var panel: MemoPanel?
-
-    override func mouseDown(with event: NSEvent) {
-        if event.modifierFlags.contains(.command) {
-            // Cmd+拖拽：用 modal tracking loop 手动捕获事件
-            let startPos = NSEvent.mouseLocation
-            let startFrame = panel?.frame.origin ?? .zero
-            var keepTracking = true
-            while keepTracking {
-                guard let nextEvent = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) else {
-                    break
-                }
-                switch nextEvent.type {
-                case .leftMouseDragged:
-                    let currentPos = NSEvent.mouseLocation
-                    panel?.setFrameOrigin(NSPoint(
-                        x: startFrame.x + (currentPos.x - startPos.x),
-                        y: startFrame.y + (currentPos.y - startPos.y)
-                    ))
-                case .leftMouseUp:
-                    panel?.savePosition()
-                    keepTracking = false
-                default:
-                    keepTracking = false
-                }
-            }
-        } else {
-            super.mouseDown(with: event)
-        }
-    }
 
     /// 禁用系统默认的"编辑菜单"（复制/粘贴等），让 NSView.menu 生效
     override func menu(for event: NSEvent) -> NSMenu? {
@@ -483,6 +413,49 @@ class MemoTextView: NSTextView {
             return super.performKeyEquivalent(with: event)
         }
         return false
+    }
+}
+
+// MARK: - Cmd+拖拽手势识别器
+//
+// 核心思路：用 NSGestureRecognizer 统一处理 Cmd+拖拽，
+// 不依赖任何特定 NSView 的 mouseDown/mouseDragged/mouseUp。
+// 手势识别器挂载在 contentView 上，无论事件被哪个子视图接收，
+// 只要 Cmd 键按下，手势识别器都能捕获。
+
+class MemoDragGestureRecognizer: NSGestureRecognizer {
+    private var isDragging = false
+
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.command) {
+            isDragging = true
+            state = .began
+        } else {
+            isDragging = false
+            super.mouseDown(with: event)
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        if isDragging {
+            state = .changed
+        } else {
+            super.mouseDragged(with: event)
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if isDragging {
+            isDragging = false
+            state = .ended
+        } else {
+            super.mouseUp(with: event)
+        }
+    }
+
+    override func reset() {
+        isDragging = false
+        super.reset()
     }
 }
 
