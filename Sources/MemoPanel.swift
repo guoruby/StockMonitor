@@ -433,6 +433,11 @@ class MemoTextView: NSTextView {
         panel?.showContextMenu(at: NSEvent.mouseLocation)
     }
 
+    /// 禁用系统默认的"编辑菜单"，强制走我们自己的右键菜单
+    override func menu(for event: NSEvent) -> NSMenu? {
+        return nil
+    }
+
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "a" {
             return super.performKeyEquivalent(with: event)
