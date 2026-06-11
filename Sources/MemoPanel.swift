@@ -3,15 +3,17 @@ import Cocoa
 class MemoPanel: NSPanel {
     private let memoId: String
     private var textView: MemoTextView!
-    private var closeBtn: NSButton!
     private var isClosing = false
+    private var isCmdDragging = false
+    private var cmdDragStartPos: NSPoint = .zero
+    private var cmdDragStartFrameOrigin: NSPoint = .zero
 
     init(memo: MemoItem) {
         self.memoId = memo.id
 
         super.init(
             contentRect: NSRect(x: memo.x, y: memo.y, width: memo.width, height: memo.height),
-            styleMask: [.borderless, .nonactivatingPanel, .resizable, .utilityWindow],
+            styleMask: [.borderless, .resizable, .utilityWindow],
             backing: .buffered,
             defer: false
         )
@@ -19,7 +21,6 @@ class MemoPanel: NSPanel {
         isFloatingPanel = true
         level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.floatingWindow)))
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        isMovableByWindowBackground = true
         hidesOnDeactivate = false
         backgroundColor = .clear
         isReleasedWhenClosed = false
@@ -29,46 +30,20 @@ class MemoPanel: NSPanel {
 
         NotificationCenter.default.addObserver(
             forName: NSWindow.didResizeNotification, object: self, queue: .main
-        ) { [weak self] _ in
-            self?.layoutSubviews()
-        }
+        ) { [weak self] _ in self?.layoutSubviews() }
     }
 
     private func setupContent(memo: MemoItem) {
         let container = MemoContainerView(frame: NSRect(x: 0, y: 0, width: memo.width, height: memo.height))
         container.panel = self
 
-        // 关闭按钮
-        closeBtn = NSButton(frame: NSRect(x: memo.width - 18, y: memo.height - 18, width: 14, height: 14))
-        closeBtn.isBordered = false
-        closeBtn.wantsLayer = true
-        closeBtn.layer?.backgroundColor = .clear
-        let closeImg = NSImage(size: NSSize(width: 14, height: 14))
-        closeImg.lockFocus()
-        let c = NSColor(calibratedRed: 0.6, green: 0.6, blue: 0.6, alpha: 1)
-        c.setStroke()
-        let path = NSBezierPath()
-        path.lineWidth = 1.5
-        path.lineCapStyle = .round
-        path.move(to: NSPoint(x: 3, y: 3))
-        path.line(to: NSPoint(x: 11, y: 11))
-        path.move(to: NSPoint(x: 11, y: 3))
-        path.line(to: NSPoint(x: 3, y: 11))
-        path.stroke()
-        closeImg.unlockFocus()
-        closeBtn.image = closeImg
-        closeBtn.target = self
-        closeBtn.action = #selector(closeMemo)
-        container.addSubview(closeBtn)
-
-        // 文本编辑区
-        let textContainer = NSTextContainer()
+        let textContainer = NSTextContainer(containerSize: NSSize(width: memo.width - 12, height: .greatestFiniteMagnitude))
         let layoutManager = NSLayoutManager()
         layoutManager.addTextContainer(textContainer)
         let textStorage = NSTextStorage()
         textStorage.addLayoutManager(layoutManager)
 
-        textView = MemoTextView(frame: NSRect(x: 6, y: 4, width: memo.width - 12, height: memo.height - 22),
+        textView = MemoTextView(frame: NSRect(x: 6, y: 4, width: memo.width - 12, height: memo.height - 8),
                                 textContainer: textContainer)
         textView.string = memo.text
         textView.font = NSFont.systemFont(ofSize: 13)
@@ -80,6 +55,7 @@ class MemoPanel: NSPanel {
         textView.allowsUndo = true
         textView.insertionPointColor = NSColor(calibratedRed: 0.3, green: 0.3, blue: 0.3, alpha: 1)
         textView.delegate = self
+        textView.panel = self // 让textView能通知窗口拖拽
         container.addSubview(textView)
 
         contentView = container
@@ -88,6 +64,7 @@ class MemoPanel: NSPanel {
     @objc private func closeMemo() {
         isClosing = true
         savePosition()
+        saveText()
         MemoStore.shared.remove(id: memoId)
         close()
         NotificationCenter.default.post(name: .memoDidClose, object: nil, userInfo: ["id": memoId])
@@ -98,10 +75,8 @@ class MemoPanel: NSPanel {
         let frame = contentRect(forFrameRect: self.frame)
         MemoStore.shared.update(
             id: memoId,
-            x: frame.origin.x,
-            y: frame.origin.y,
-            width: frame.width,
-            height: frame.height
+            x: frame.origin.x, y: frame.origin.y,
+            width: frame.width, height: frame.height
         )
     }
 
@@ -109,11 +84,38 @@ class MemoPanel: NSPanel {
         MemoStore.shared.update(id: memoId, text: textView.string)
     }
 
+    func beginCmdDrag(_ startPos: NSPoint) {
+        isCmdDragging = true
+        cmdDragStartPos = startPos
+        cmdDragStartFrameOrigin = frame.origin
+    }
+
+    func continueCmdDrag(_ currentPos: NSPoint) {
+        guard isCmdDragging else { return }
+        let dx = currentPos.x - cmdDragStartPos.x
+        let dy = currentPos.y - cmdDragStartPos.y
+        setFrameOrigin(NSPoint(x: cmdDragStartFrameOrigin.x + dx, y: cmdDragStartFrameOrigin.y + dy))
+    }
+
+    func endCmdDrag() {
+        if isCmdDragging {
+            isCmdDragging = false
+            savePosition()
+        }
+    }
+
     private func layoutSubviews() {
-        let w = contentView!.bounds.width
-        let h = contentView!.bounds.height
-        closeBtn.frame = NSRect(x: w - 18, y: h - 18, width: 14, height: 14)
-        textView.frame = NSRect(x: 6, y: 4, width: w - 12, height: h - 22)
+        guard let cv = contentView else { return }
+        let w = cv.bounds.width
+        let h = cv.bounds.height
+        textView.frame = NSRect(x: 6, y: 4, width: w - 12, height: h - 8)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        let menu = NSMenu()
+        menu.addItem(withTitle: "关闭便签", action: #selector(closeMemo), keyEquivalent: "")
+        menu.addItem(NSMenuItem.separator())
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
     }
 }
 
@@ -129,10 +131,10 @@ extension MemoPanel: NSTextViewDelegate {
 
 class MemoContainerView: NSView {
     weak var panel: MemoPanel?
+    private var isCmdDragging = false
 
     override func draw(_ dirtyRect: NSRect) {
-        let rect = bounds
-        let path = NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: rect.width, height: rect.height), xRadius: 6, yRadius: 6)
+        let path = NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6)
         NSColor(calibratedWhite: 1, alpha: 0.95).setFill()
         path.fill()
         NSColor(calibratedWhite: 0.85, alpha: 1).setStroke()
@@ -140,17 +142,57 @@ class MemoContainerView: NSView {
         path.stroke()
     }
 
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.command) {
+            isCmdDragging = true
+            panel?.beginCmdDrag(NSEvent.mouseLocation)
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        if isCmdDragging {
+            panel?.continueCmdDrag(NSEvent.mouseLocation)
+        }
+    }
+
     override func mouseUp(with event: NSEvent) {
-        panel?.savePosition()
-        super.mouseUp(with: event)
+        if isCmdDragging {
+            isCmdDragging = false
+            panel?.endCmdDrag()
+        }
     }
 }
 
-// MARK: - TextView
+// MARK: - TextView（可编辑，Cmd+拖拽移动）
 
 class MemoTextView: NSTextView {
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
+    weak var panel: MemoPanel?
+    private var isCmdDragging = false
+
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.command) {
+            isCmdDragging = true
+            panel?.beginCmdDrag(NSEvent.mouseLocation)
+        } else {
+            super.mouseDown(with: event)
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        if isCmdDragging {
+            panel?.continueCmdDrag(NSEvent.mouseLocation)
+        } else {
+            super.mouseDragged(with: event)
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if isCmdDragging {
+            isCmdDragging = false
+            panel?.endCmdDrag()
+        } else {
+            super.mouseUp(with: event)
+        }
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
