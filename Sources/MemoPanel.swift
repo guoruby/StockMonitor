@@ -15,13 +15,10 @@ class MemoPanel: NSPanel {
     private var previewScroll: NSScrollView!
     private var isClosing = false
 
-    // 拖拽状态（panel 层级）
-    private var isCmdDragging = false
-    private var cmdDragStartPos: NSPoint = .zero
-    private var cmdDragStartFrameOrigin: NSPoint = .zero
-
     /// 当前是否处于编辑态（false = 预览态）
     private var isInEditMode = false
+    /// 首次展示标记：防止 makeKeyAndOrderFront 触发 didBecomeKey 时自动切到编辑态
+    private var isInitialDisplay = true
 
     init(memo: MemoItem) {
         self.memoId = memo.id
@@ -180,48 +177,41 @@ class MemoPanel: NSPanel {
 
     // MARK: - 拖拽
 
-    func beginCmdDrag(_ pos: NSPoint) {
-        isCmdDragging = true
-        cmdDragStartPos = pos
-        cmdDragStartFrameOrigin = frame.origin
-    }
-
-    func continueCmdDrag(_ pos: NSPoint) {
-        guard isCmdDragging else { return }
-        setFrameOrigin(NSPoint(
-            x: cmdDragStartFrameOrigin.x + (pos.x - cmdDragStartPos.x),
-            y: cmdDragStartFrameOrigin.y + (pos.y - cmdDragStartPos.y)
-        ))
-    }
-
-    func endCmdDrag() {
-        if isCmdDragging { isCmdDragging = false; savePosition() }
-    }
-
     private func layoutSubviews() {
         // scrollView autoresizingMask=[.width,.height] 自动跟随 contentView
     }
 
-    // MARK: - Panel 鼠标事件（处理 Cmd+拖拽移动窗口）
+    // MARK: - Panel 鼠标事件（Cmd+拖拽移动窗口）
 
+    /// 使用 modal event tracking loop 捕获拖拽事件
+    /// 不调用 super.mouseDown 的话，系统不会自动分发 mouseDragged/mouseUp
+    /// 必须手动用 nextEvent 循环读取
     override func mouseDown(with event: NSEvent) {
         if event.modifierFlags.contains(.command) {
-            isCmdDragging = true
-            cmdDragStartPos = NSEvent.mouseLocation
-            cmdDragStartFrameOrigin = frame.origin
+            let startPos = NSEvent.mouseLocation
+            let startFrame = frame.origin
+            var keepTracking = true
+            while keepTracking {
+                guard let nextEvent = nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) else {
+                    break
+                }
+                switch nextEvent.type {
+                case .leftMouseDragged:
+                    let currentPos = NSEvent.mouseLocation
+                    setFrameOrigin(NSPoint(
+                        x: startFrame.x + (currentPos.x - startPos.x),
+                        y: startFrame.y + (currentPos.y - startPos.y)
+                    ))
+                case .leftMouseUp:
+                    savePosition()
+                    keepTracking = false
+                default:
+                    keepTracking = false
+                }
+            }
         } else {
             super.mouseDown(with: event)
         }
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        if isCmdDragging { continueCmdDrag(NSEvent.mouseLocation) }
-        else { super.mouseDragged(with: event) }
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        if isCmdDragging { isCmdDragging = false; savePosition() }
-        else { super.mouseUp(with: event) }
     }
 
     // MARK: - 右键菜单（fallback，menu 属性已覆盖大部分情况）
@@ -264,6 +254,11 @@ class MemoPanel: NSPanel {
     }
 
     @objc private func windowDidBecomeKey(_ notification: Notification) {
+        // 首次展示时保持预览态，不自动切换
+        if isInitialDisplay {
+            isInitialDisplay = false
+            return
+        }
         switchToEdit()
     }
 
@@ -401,7 +396,6 @@ extension MemoPanel: NSTextViewDelegate {
 
 class MemoContainerView: NSView {
     weak var panel: MemoPanel?
-    private var isCmdDragging = false
 
     override func draw(_ dirtyRect: NSRect) {
         let path = NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6)
@@ -414,21 +408,33 @@ class MemoContainerView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         if event.modifierFlags.contains(.command) {
-            isCmdDragging = true
-            panel?.beginCmdDrag(NSEvent.mouseLocation)
+            // Cmd+拖拽：用 modal tracking loop 手动捕获事件
+            let startPos = NSEvent.mouseLocation
+            let startFrame = panel?.frame.origin ?? .zero
+            var keepTracking = true
+            while keepTracking {
+                guard let nextEvent = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) else {
+                    break
+                }
+                switch nextEvent.type {
+                case .leftMouseDragged:
+                    let currentPos = NSEvent.mouseLocation
+                    panel?.setFrameOrigin(NSPoint(
+                        x: startFrame.x + (currentPos.x - startPos.x),
+                        y: startFrame.y + (currentPos.y - startPos.y)
+                    ))
+                case .leftMouseUp:
+                    panel?.savePosition()
+                    keepTracking = false
+                default:
+                    keepTracking = false
+                }
+            }
         } else {
             // 点击空白区域 → 进入编辑态
             panel?.makeKeyAndOrderFront(nil)
             panel?.editView.window?.makeFirstResponder(panel?.editView)
         }
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        if isCmdDragging { panel?.continueCmdDrag(NSEvent.mouseLocation) }
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        if isCmdDragging { isCmdDragging = false; panel?.endCmdDrag() }
     }
 }
 
@@ -437,25 +443,34 @@ class MemoContainerView: NSView {
 /// 编辑态专用 TextView：只负责文本输入，不做任何特殊拦截
 class MemoTextView: NSTextView {
     weak var panel: MemoPanel?
-    private var isCmdDragging = false
 
     override func mouseDown(with event: NSEvent) {
         if event.modifierFlags.contains(.command) {
-            isCmdDragging = true
-            panel?.beginCmdDrag(NSEvent.mouseLocation)
+            // Cmd+拖拽：用 modal tracking loop 手动捕获事件
+            let startPos = NSEvent.mouseLocation
+            let startFrame = panel?.frame.origin ?? .zero
+            var keepTracking = true
+            while keepTracking {
+                guard let nextEvent = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) else {
+                    break
+                }
+                switch nextEvent.type {
+                case .leftMouseDragged:
+                    let currentPos = NSEvent.mouseLocation
+                    panel?.setFrameOrigin(NSPoint(
+                        x: startFrame.x + (currentPos.x - startPos.x),
+                        y: startFrame.y + (currentPos.y - startPos.y)
+                    ))
+                case .leftMouseUp:
+                    panel?.savePosition()
+                    keepTracking = false
+                default:
+                    keepTracking = false
+                }
+            }
         } else {
             super.mouseDown(with: event)
         }
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        if isCmdDragging { panel?.continueCmdDrag(NSEvent.mouseLocation) }
-        else { super.mouseDragged(with: event) }
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        if isCmdDragging { isCmdDragging = false; panel?.endCmdDrag() }
-        else { super.mouseUp(with: event) }
     }
 
     /// 禁用系统默认的"编辑菜单"（复制/粘贴等），让 NSView.menu 生效
