@@ -8,6 +8,9 @@ class MemoPanel: NSPanel {
     private var cmdDragStartPos: NSPoint = .zero
     private var cmdDragStartFrameOrigin: NSPoint = .zero
 
+    /// 原始纯文本（始终包含 Markdown 标记），作为数据源
+    private var rawText: String = ""
+
     init(memo: MemoItem) {
         self.memoId = memo.id
 
@@ -66,6 +69,7 @@ class MemoPanel: NSPanel {
         contentView = container
 
         // 初始加载
+        rawText = memo.text
         textView.textStorage?.setAttributedString(NSAttributedString(
             string: memo.text,
             attributes: [
@@ -92,7 +96,7 @@ class MemoPanel: NSPanel {
     }
 
     func saveText() {
-        MemoStore.shared.update(id: memoId, text: textView.string)
+        MemoStore.shared.update(id: memoId, text: rawText)
     }
 
     func beginCmdDrag(_ pos: NSPoint) {
@@ -113,109 +117,150 @@ class MemoPanel: NSPanel {
         if isCmdDragging { isCmdDragging = false; savePosition() }
     }
 
-    // MARK: - 逐行渲染：当前行编辑，其他行预览
+    // MARK: - 逐行渲染：当前行编辑（显示标记），其他行预览（隐藏标记，显示效果）
 
-    /// 获取光标所在的行号（从0开始）
-    private func currentLineIndex() -> Int? {
-        guard let storage = textView.textStorage else { return nil }
+    /// 获取光标在 rawText 中的位置对应的行号
+    private func currentLineIndex() -> Int {
         let cursorPos = textView.selectedRange.location
-        if cursorPos >= storage.length { return storage.string.components(separatedBy: "\n").count - 1 }
-        let plain = storage.string as NSString
-        var lineIdx = 0
-        for line in plain.components(separatedBy: "\n") {
-            if cursorPos <= lineIdx + (line as NSString).length {
-                return lineIdx
+        // 将光标位置映射回 rawText 中的位置
+        // 简化处理：因为当前行的内容=rawText对应行，直接在rawText中计算
+        let lines = rawText.components(separatedBy: "\n")
+        var charOffset = 0
+        for (idx, line) in lines.enumerated() {
+            let lineLen = (line as NSString).length
+            if cursorPos <= charOffset + lineLen {
+                return idx
             }
-            lineIdx += (line as NSString).length + 1 // +1 for \n
+            charOffset += lineLen + 1
         }
-        return lineIdx
+        return max(0, lines.count - 1)
     }
 
-    /// 核心：逐行渲染，当前行纯文本，其他行 Markdown 预览
     func renderPerLine() {
         guard let storage = textView.textStorage else { return }
-        let plain = storage.string as NSString
 
-        // 光标所在行（如果正在输入）
         let currentLine = currentLineIndex()
-
         let baseFont = NSFont.systemFont(ofSize: 13)
         let defaultColor = NSColor(calibratedRed: 0.2, green: 0.2, blue: 0.2, alpha: 1)
 
-        storage.beginEditing()
+        // 基于 rawText 逐行构建新的 attributedString
+        let result = NSMutableAttributedString()
+        let lines = rawText.components(separatedBy: "\n")
 
-        // 全部先设为默认样式
-        storage.setAttributes([.font: baseFont, .foregroundColor: defaultColor],
-                              range: NSRange(location: 0, length: plain.length))
+        for (idx, line) in lines.enumerated() {
+            if idx > 0 { result.append(NSAttributedString(string: "\n")) }
 
-        // 逐行处理
-        let lines = plain.components(separatedBy: "\n")
-        var charOffset = 0
-        for (lineIdx, line) in lines.enumerated() {
-            let lineLen = (line as NSString).length
-            let lineRange = NSRange(location: charOffset, length: lineLen == 0 ? 0 : lineLen)
-
-            if lineIdx == currentLine {
-                // 当前行：纯文本，不渲染 Markdown
-                charOffset += lineLen + 1
-                continue
+            if idx == currentLine {
+                // 当前行：纯文本，保留 Markdown 标记供编辑
+                result.append(NSAttributedString(string: line, attributes: [
+                    .font: baseFont,
+                    .foregroundColor: defaultColor
+                ]))
+            } else {
+                // 其他行：渲染 Markdown（去掉标记符号，应用样式）
+                result.append(renderMarkdownLine(line, baseFont: baseFont, defaultColor: defaultColor))
             }
-
-            // 非当前行：渲染 Markdown
-            renderMarkdownForLine(line: line, inStorage: storage, at: lineRange, baseFont: baseFont, defaultColor: defaultColor)
-
-            charOffset += lineLen + 1
         }
 
+        // 保存当前光标位置（相对于当前行，内容一致所以偏移有效）
+        let selectedRanges = textView.selectedRanges
+
+        storage.beginEditing()
+        storage.setAttributedString(result)
         storage.endEditing()
+
+        // 恢复选中范围
+        textView.selectedRanges = selectedRanges
     }
 
-    /// 对单行应用 Markdown 渲染
-    private func renderMarkdownForLine(line: String, inStorage storage: NSTextStorage, at lineRange: NSRange, baseFont: NSFont, defaultColor: NSColor) {
+    /// 渲染单行 Markdown：去掉标记符号，应用样式
+    private func renderMarkdownLine(_ line: String, baseFont: NSFont, defaultColor: NSColor) -> NSAttributedString {
         var remaining = line
         var font = baseFont
 
-        // 标题
+        // 标题检测
         if remaining.hasPrefix("# ") {
             font = NSFont.boldSystemFont(ofSize: 16)
-            storage.addAttributes([.font: font], range: NSRange(location: lineRange.location, length: min(2, lineRange.length)))
+            remaining = String(remaining.dropFirst(2))
         } else if remaining.hasPrefix("## ") {
             font = NSFont.boldSystemFont(ofSize: 14)
-            storage.addAttributes([.font: font], range: NSRange(location: lineRange.location, length: min(3, lineRange.length)))
+            remaining = String(remaining.dropFirst(3))
         }
 
-        // 内联标记
-        let pattern = "(\\*\\*[^*]+\\*\\*)|(\\*[^*]+\\*)|(\\[red\\][^\\[]+\\[/red\\])|(\\[green\\][^\\[]+\\[/green\\])|(\\[blue\\][^\\[]+\\[/blue\\])"
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
+        let nsRemaining = remaining as NSString
 
-        let nsLine = remaining as NSString
-        let matches = regex.matches(in: remaining, range: NSRange(location: 0, length: nsLine.length))
+        // 匹配内联标记
+        let pattern = "(\\*\\*[^*]+\\*\\*)|(\\*[^*]+\\*)|(\\[red\\][^\\[]+\\[/red\\])|(\\[green\\][^\\[]+\\[/green\\])|(\\[blue\\][^\\[]+\\[/blue\\])"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return NSAttributedString(string: remaining, attributes: [.font: font, .foregroundColor: defaultColor])
+        }
+
+        let matches = regex.matches(in: remaining, range: NSRange(location: 0, length: nsRemaining.length))
+        let result = NSMutableAttributedString()
+        var lastEnd = 0
 
         for match in matches {
-            // 匹配到的 range 是相对于行的，需要加上行偏移
-            let absRange = NSRange(
-                location: lineRange.location + match.range.location,
-                length: match.range.length
-            )
-            let matched = nsLine.substring(with: match.range)
+            // 前面的普通文本
+            if match.range.location > lastEnd {
+                let plain = nsRemaining.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
+                result.append(NSAttributedString(string: plain, attributes: [.font: font, .foregroundColor: defaultColor]))
+            }
+
+            let matched = nsRemaining.substring(with: match.range)
 
             if matched.hasPrefix("**") && matched.hasSuffix("**") {
-                storage.addAttributes([
+                // 加粗：去掉 ** 符号，只保留内部文字 + 加粗字体
+                let inner = String(matched.dropFirst(2).dropLast(2))
+                result.append(NSAttributedString(string: inner, attributes: [
                     .font: NSFont.boldSystemFont(ofSize: font.pointSize),
                     .foregroundColor: defaultColor
-                ], range: absRange)
+                ]))
             } else if matched.hasPrefix("*") && matched.hasSuffix("*") && matched.count > 2 {
+                // 斜体：去掉 * 符号
+                let inner = String(matched.dropFirst().dropLast())
                 let italicDesc = font.fontDescriptor.withSymbolicTraits(.italic)
                 let italicFont = NSFont(descriptor: italicDesc, size: font.pointSize) ?? font
-                storage.addAttributes([.font: italicFont, .foregroundColor: defaultColor], range: absRange)
+                result.append(NSAttributedString(string: inner, attributes: [
+                    .font: italicFont,
+                    .foregroundColor: defaultColor
+                ]))
             } else if matched.hasPrefix("[red]") {
-                storage.addAttributes([.font: font, .foregroundColor: NSColor.red], range: absRange)
+                // 红色：去掉 [red][/red] 标签
+                let inner: String
+                if matched == "[red][/red]" { inner = "" }
+                else { inner = String(matched.dropFirst(5).dropLast(6)) }
+                result.append(NSAttributedString(string: inner, attributes: [
+                    .font: font,
+                    .foregroundColor: NSColor.red
+                ]))
             } else if matched.hasPrefix("[green]") {
-                storage.addAttributes([.font: font, .foregroundColor: NSColor(calibratedRed: 0, green: 0.55, blue: 0, alpha: 1)], range: absRange)
+                let inner: String
+                if matched == "[green][/green]" { inner = "" }
+                else { inner = String(matched.dropFirst(7).dropLast(8)) }
+                result.append(NSAttributedString(string: inner, attributes: [
+                    .font: font,
+                    .foregroundColor: NSColor(calibratedRed: 0, green: 0.55, blue: 0, alpha: 1)
+                ]))
             } else if matched.hasPrefix("[blue]") {
-                storage.addAttributes([.font: font, .foregroundColor: NSColor.blue], range: absRange)
+                let inner: String
+                if matched == "[blue][/blue]" { inner = "" }
+                else { inner = String(matched.dropFirst(6).dropLast(7)) }
+                result.append(NSAttributedString(string: inner, attributes: [
+                    .font: font,
+                    .foregroundColor: NSColor.blue
+                ]))
             }
+
+            lastEnd = match.range.location + match.range.length
         }
+
+        // 尾部剩余
+        if lastEnd < nsRemaining.length {
+            let tail = nsRemaining.substring(from: lastEnd)
+            result.append(NSAttributedString(string: tail, attributes: [.font: font, .foregroundColor: defaultColor]))
+        }
+
+        return result
     }
 
     private func layoutSubviews() {
@@ -281,13 +326,55 @@ class MemoPanel: NSPanel {
 
 extension MemoPanel: NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
+        // 将当前行（用户正在编辑的）同步回 rawText
+        syncCurrentLineToRawText()
         saveText()
         renderPerLine()
     }
 
     // 光标移动 → 切换当前行，重新渲染
     func textViewDidChangeSelection(_ notification: Notification) {
+        // 先同步旧当前行的修改到 rawText，再切换渲染
         renderPerLine()
+    }
+
+    /// 把 textView 中当前行的内容写回 rawText 对应位置
+    private func syncCurrentLineToRawText() {
+        guard let storage = textView.textStorage else { return }
+        let cursorPos = textView.selectedRange.location
+
+        let lines = rawText.components(separatedBy: "\n")
+        var charOffset = 0
+        var targetLineIdx = 0
+        for (idx, line) in lines.enumerated() {
+            let lineLen = (line as NSString).length
+            if cursorPos <= charOffset + lineLen {
+                targetLineIdx = idx
+                break
+            }
+            charOffset += lineLen + 1
+        }
+
+        // 从 storage 中提取当前行的实际文本
+        let storageString = storage.string as NSString
+        var storageCharOffset = 0
+        var currentLineInStorage = ""
+        for (idx, line) in lines.enumerated() {
+            let lineLen = (line as NSString).length
+            if idx == targetLineIdx {
+                let end = min(storageCharOffset + lineLen, storageString.length)
+                currentLineInStorage = storageString.substring(with: NSRange(location: storageCharOffset, length: end - storageCharOffset))
+                break
+            }
+            storageCharOffset += lineLen + 1
+        }
+
+        // 更新 rawText 中的对应行
+        var rawLines = rawText.components(separatedBy: "\n")
+        if targetLineIdx < rawLines.count {
+            rawLines[targetLineIdx] = currentLineInStorage
+            rawText = rawLines.joined(separator: "\n")
+        }
     }
 }
 
