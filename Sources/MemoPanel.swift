@@ -33,16 +33,6 @@ class MemoPanel: NSPanel {
         NotificationCenter.default.addObserver(
             forName: NSWindow.didResizeNotification, object: self, queue: .main
         ) { [weak self] _ in self?.layoutSubviews() }
-
-        // 失焦 → 渲染Markdown
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.didResignKeyNotification, object: self, queue: .main
-        ) { [weak self] _ in self?.reapplyMarkdownStyle() }
-
-        // 聚焦 → 恢复纯文本显示
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.didBecomeKeyNotification, object: self, queue: .main
-        ) { [weak self] _ in self?.clearStyles() }
     }
 
     override var canBecomeKey: Bool { true }
@@ -75,7 +65,7 @@ class MemoPanel: NSPanel {
 
         contentView = container
 
-        // 初始加载（纯文本，避免首次渲染闪动）
+        // 初始加载
         textView.textStorage?.setAttributedString(NSAttributedString(
             string: memo.text,
             attributes: [
@@ -102,7 +92,6 @@ class MemoPanel: NSPanel {
     }
 
     func saveText() {
-        // 保存时只存纯文本（去掉格式符号，保留 Markdown 标记）
         MemoStore.shared.update(id: memoId, text: textView.string)
     }
 
@@ -124,87 +113,108 @@ class MemoPanel: NSPanel {
         if isCmdDragging { isCmdDragging = false; savePosition() }
     }
 
-    // 重新应用 Markdown 样式（保留光标位置）
-    func reapplyMarkdownStyle() {
+    // MARK: - 逐行渲染：当前行编辑，其他行预览
+
+    /// 获取光标所在的行号（从0开始）
+    private func currentLineIndex() -> Int? {
+        guard let storage = textView.textStorage else { return nil }
+        let cursorPos = textView.selectedRange.location
+        if cursorPos >= storage.length { return storage.string.components(separatedBy: "\n").count - 1 }
+        let plain = storage.string as NSString
+        var lineIdx = 0
+        for line in plain.components(separatedBy: "\n") {
+            if cursorPos <= lineIdx + (line as NSString).length {
+                return lineIdx
+            }
+            lineIdx += (line as NSString).length + 1 // +1 for \n
+        }
+        return lineIdx
+    }
+
+    /// 核心：逐行渲染，当前行纯文本，其他行 Markdown 预览
+    func renderPerLine() {
         guard let storage = textView.textStorage else { return }
         let plain = storage.string as NSString
-        let fullRange = NSRange(location: 0, length: plain.length)
+
+        // 光标所在行（如果正在输入）
+        let currentLine = currentLineIndex()
+
         let baseFont = NSFont.systemFont(ofSize: 13)
         let defaultColor = NSColor(calibratedRed: 0.2, green: 0.2, blue: 0.2, alpha: 1)
 
-        // 重置全部为默认样式
         storage.beginEditing()
-        storage.setAttributes([.font: baseFont, .foregroundColor: defaultColor], range: fullRange)
 
-        // 逐行处理（标题）
+        // 全部先设为默认样式
+        storage.setAttributes([.font: baseFont, .foregroundColor: defaultColor],
+                              range: NSRange(location: 0, length: plain.length))
+
+        // 逐行处理
         let lines = plain.components(separatedBy: "\n")
-        var lineStart = 0
-        for line in lines {
+        var charOffset = 0
+        for (lineIdx, line) in lines.enumerated() {
             let lineLen = (line as NSString).length
-            if line.hasPrefix("# ") {
-                storage.addAttributes([
-                    .font: NSFont.boldSystemFont(ofSize: 16),
-                    .foregroundColor: defaultColor
-                ], range: NSRange(location: lineStart, length: 2))
-            } else if line.hasPrefix("## ") {
-                storage.addAttributes([
-                    .font: NSFont.boldSystemFont(ofSize: 14),
-                    .foregroundColor: defaultColor
-                ], range: NSRange(location: lineStart, length: 3))
-            }
-            lineStart += lineLen + 1 // +1 for newline
-        }
+            let lineRange = NSRange(location: charOffset, length: lineLen == 0 ? 0 : lineLen)
 
-        // 处理内联标记
-        let pattern = "(\\*\\*[^*]+\\*\\*)|(\\*[^*]+\\*)|(\\[red\\][^\\[]+\\[/red\\])|(\\[green\\][^\\[]+\\[/green\\])|(\\[blue\\][^\\[]+\\[/blue\\])"
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
-            storage.endEditing()
-            return
-        }
-        let matches = regex.matches(in: plain as String, range: fullRange)
-
-        for match in matches {
-            let matched = plain.substring(with: match.range)
-            if matched.hasPrefix("**") && matched.hasSuffix("**") {
-                let inner = String(matched.dropFirst(2).dropLast(2))
-                applyInline(storage: storage, at: match.range, originalLength: matched.count, newString: inner) {
-                    NSFont.boldSystemFont(ofSize: baseFont.pointSize)
-                }
-            } else if matched.hasPrefix("*") && matched.hasSuffix("*") && matched.count > 2 {
-                let inner = String(matched.dropFirst().dropLast())
-                let italicDesc = baseFont.fontDescriptor.withSymbolicTraits(.italic)
-                let italicFont = NSFont(descriptor: italicDesc, size: baseFont.pointSize) ?? baseFont
-                applyInline(storage: storage, at: match.range, originalLength: matched.count, newString: inner) {
-                    italicFont
-                }
-            } else if matched.hasPrefix("[red]") {
-                let inner = String(matched.dropFirst(5).dropLast(6))
-                applyInline(storage: storage, at: match.range, originalLength: matched.count, newString: inner) {
-                    NSColor.red
-                }
-            } else if matched.hasPrefix("[green]") {
-                let inner = String(matched.dropFirst(7).dropLast(8))
-                applyInline(storage: storage, at: match.range, originalLength: matched.count, newString: inner) {
-                    NSColor(calibratedRed: 0, green: 0.55, blue: 0, alpha: 1)
-                }
-            } else if matched.hasPrefix("[blue]") {
-                let inner = String(matched.dropFirst(6).dropLast(7))
-                applyInline(storage: storage, at: match.range, originalLength: matched.count, newString: inner) {
-                    NSColor.blue
-                }
+            if lineIdx == currentLine {
+                // 当前行：纯文本，不渲染 Markdown
+                charOffset += lineLen + 1
+                continue
             }
+
+            // 非当前行：渲染 Markdown
+            renderMarkdownForLine(line: line, inStorage: storage, at: lineRange, baseFont: baseFont, defaultColor: defaultColor)
+
+            charOffset += lineLen + 1
         }
 
         storage.endEditing()
     }
 
-    // 给内联标记整段染色（包括 Markdown 符号本身），视觉上符号也变色
-    private func applyInline(storage: NSTextStorage, at range: NSRange, originalLength: Int, newString: String, attr: () -> Any) {
-        if let font = attr() as? NSFont {
-            storage.addAttribute(.font, value: font, range: range)
+    /// 对单行应用 Markdown 渲染
+    private func renderMarkdownForLine(line: String, inStorage storage: NSTextStorage, at lineRange: NSRange, baseFont: NSFont, defaultColor: NSColor) {
+        var remaining = line
+        var font = baseFont
+
+        // 标题
+        if remaining.hasPrefix("# ") {
+            font = NSFont.boldSystemFont(ofSize: 16)
+            storage.addAttributes([.font: font], range: NSRange(location: lineRange.location, length: min(2, lineRange.length)))
+        } else if remaining.hasPrefix("## ") {
+            font = NSFont.boldSystemFont(ofSize: 14)
+            storage.addAttributes([.font: font], range: NSRange(location: lineRange.location, length: min(3, lineRange.length)))
         }
-        if let color = attr() as? NSColor {
-            storage.addAttribute(.foregroundColor, value: color, range: range)
+
+        // 内联标记
+        let pattern = "(\\*\\*[^*]+\\*\\*)|(\\*[^*]+\\*)|(\\[red\\][^\\[]+\\[/red\\])|(\\[green\\][^\\[]+\\[/green\\])|(\\[blue\\][^\\[]+\\[/blue\\])"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
+
+        let nsLine = remaining as NSString
+        let matches = regex.matches(in: remaining, range: NSRange(location: 0, length: nsLine.length))
+
+        for match in matches {
+            // 匹配到的 range 是相对于行的，需要加上行偏移
+            let absRange = NSRange(
+                location: lineRange.location + match.range.location,
+                length: match.range.length
+            )
+            let matched = nsLine.substring(with: match.range)
+
+            if matched.hasPrefix("**") && matched.hasSuffix("**") {
+                storage.addAttributes([
+                    .font: NSFont.boldSystemFont(ofSize: font.pointSize),
+                    .foregroundColor: defaultColor
+                ], range: absRange)
+            } else if matched.hasPrefix("*") && matched.hasSuffix("*") && matched.count > 2 {
+                let italicDesc = font.fontDescriptor.withSymbolicTraits(.italic)
+                let italicFont = NSFont(descriptor: italicDesc, size: font.pointSize) ?? font
+                storage.addAttributes([.font: italicFont, .foregroundColor: defaultColor], range: absRange)
+            } else if matched.hasPrefix("[red]") {
+                storage.addAttributes([.font: font, .foregroundColor: NSColor.red], range: absRange)
+            } else if matched.hasPrefix("[green]") {
+                storage.addAttributes([.font: font, .foregroundColor: NSColor(calibratedRed: 0, green: 0.55, blue: 0, alpha: 1)], range: absRange)
+            } else if matched.hasPrefix("[blue]") {
+                storage.addAttributes([.font: font, .foregroundColor: NSColor.blue], range: absRange)
+            }
         }
     }
 
@@ -240,26 +250,13 @@ class MemoPanel: NSPanel {
         showContextMenu(at: NSEvent.mouseLocation)
     }
 
-    // 清除所有样式（恢复纯文本显示，不改变字符串内容）
-    func clearStyles() {
-        guard let storage = textView.textStorage else { return }
-        let baseFont = NSFont.systemFont(ofSize: 13)
-        let defaultColor = NSColor(calibratedRed: 0.2, green: 0.2, blue: 0.2, alpha: 1)
-        storage.beginEditing()
-        storage.setAttributes(
-            [.font: baseFont, .foregroundColor: defaultColor],
-            range: NSRange(location: 0, length: storage.length)
-        )
-        storage.endEditing()
-    }
-
     func showContextMenu(at point: NSPoint) {
         let menu = NSMenu()
         let hideItem = NSMenuItem(title: "隐藏便签", action: #selector(hideMemo), keyEquivalent: "")
         hideItem.target = self
         menu.addItem(hideItem)
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "--- 格式化语法（直接输入即可）---", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "--- 格式化语法 ---", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "**加粗文字**", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "*斜体文字*", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "[red]红色[/red]", action: nil, keyEquivalent: ""))
@@ -269,7 +266,6 @@ class MemoPanel: NSPanel {
         menu.popUp(positioning: nil, at: point, in: nil)
     }
 
-    // 隐藏便签（数据保留，可通过"显示便签"重新打开）
     @objc func hideMemo() {
         let f = contentRect(forFrameRect: self.frame)
         MemoStore.shared.update(id: memoId, x: f.origin.x, y: f.origin.y,
@@ -286,7 +282,12 @@ class MemoPanel: NSPanel {
 extension MemoPanel: NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
         saveText()
-        // 不在编辑时实时渲染，避免光标错乱；只在失焦时渲染
+        renderPerLine()
+    }
+
+    // 光标移动 → 切换当前行，重新渲染
+    func textViewDidChangeSelection(_ notification: Notification) {
+        renderPerLine()
     }
 }
 
@@ -358,108 +359,6 @@ class MemoTextView: NSTextView {
             return super.performKeyEquivalent(with: event)
         }
         return false
-    }
-}
-
-// MARK: - Markdown 渲染器
-
-enum MarkdownRenderer {
-    static func render(_ text: String) -> NSAttributedString {
-        let result = NSMutableAttributedString()
-        let lines = text.components(separatedBy: "\n")
-        let baseFont = NSFont.systemFont(ofSize: 13)
-        let defaultColor = NSColor(calibratedRed: 0.2, green: 0.2, blue: 0.2, alpha: 1)
-
-        for (i, line) in lines.enumerated() {
-            if i > 0 { result.append(NSAttributedString(string: "\n")) }
-            result.append(renderLine(line, baseFont: baseFont, defaultColor: defaultColor))
-        }
-        return result
-    }
-
-    private static func renderLine(_ line: String, baseFont: NSFont, defaultColor: NSColor) -> NSAttributedString {
-        let result = NSMutableAttributedString()
-        var remaining = line
-        var font = baseFont
-
-        // 标题 # / ##
-        if remaining.hasPrefix("# ") {
-            font = NSFont.boldSystemFont(ofSize: 16)
-            remaining = String(remaining.dropFirst(2))
-        } else if remaining.hasPrefix("## ") {
-            font = NSFont.boldSystemFont(ofSize: 14)
-            remaining = String(remaining.dropFirst(3))
-        }
-
-        let nsLine = remaining as NSString
-
-        // 匹配：加粗、斜体、颜色
-        let pattern = "(\\*\\*[^*]+\\*\\*)|(\\*[^*]+\\*)|(\\[red\\]\\[/red\\])|(\\[red\\][^\\[]+\\[/red\\])|(\\[green\\]\\[/green\\])|(\\[green\\][^\\[]+\\[/green\\])|(\\[blue\\]\\[/blue\\])|(\\[blue\\][^\\[]+\\[/blue\\])"
-
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
-            return NSAttributedString(string: remaining, attributes: [.font: font, .foregroundColor: defaultColor])
-        }
-
-        let matches = regex.matches(in: remaining, range: NSRange(location: 0, length: nsLine.length))
-        var lastEnd = 0
-
-        for match in matches {
-            if match.range.location > lastEnd {
-                let plain = nsLine.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
-                result.append(NSAttributedString(string: plain, attributes: [.font: font, .foregroundColor: defaultColor]))
-            }
-
-            let matched = nsLine.substring(with: match.range)
-
-            if matched.hasPrefix("**") && matched.hasSuffix("**") {
-                let inner = String(matched.dropFirst(2).dropLast(2))
-                result.append(NSAttributedString(string: inner, attributes: [
-                    .font: NSFont.boldSystemFont(ofSize: font.pointSize),
-                    .foregroundColor: defaultColor
-                ]))
-            } else if matched.hasPrefix("*") && matched.hasSuffix("*") && matched.count > 2 {
-                let inner = String(matched.dropFirst().dropLast())
-                let italicDesc = font.fontDescriptor.withSymbolicTraits(.italic)
-                let italicFont = NSFont(descriptor: italicDesc, size: font.pointSize) ?? font
-                result.append(NSAttributedString(string: inner, attributes: [
-                    .font: italicFont,
-                    .foregroundColor: defaultColor
-                ]))
-            } else if matched.hasPrefix("[red]") {
-                let inner: String
-                if matched == "[red][/red]" { inner = "" }
-                else { inner = String(matched.dropFirst(5).dropLast(6)) }
-                result.append(NSAttributedString(string: inner, attributes: [
-                    .font: font,
-                    .foregroundColor: NSColor.red
-                ]))
-            } else if matched.hasPrefix("[green]") {
-                let inner: String
-                if matched == "[green][/green]" { inner = "" }
-                else { inner = String(matched.dropFirst(7).dropLast(8)) }
-                result.append(NSAttributedString(string: inner, attributes: [
-                    .font: font,
-                    .foregroundColor: NSColor(calibratedRed: 0, green: 0.55, blue: 0, alpha: 1)
-                ]))
-            } else if matched.hasPrefix("[blue]") {
-                let inner: String
-                if matched == "[blue][/blue]" { inner = "" }
-                else { inner = String(matched.dropFirst(6).dropLast(7)) }
-                result.append(NSAttributedString(string: inner, attributes: [
-                    .font: font,
-                    .foregroundColor: NSColor.blue
-                ]))
-            }
-
-            lastEnd = match.range.location + match.range.length
-        }
-
-        if lastEnd < nsLine.length {
-            let tail = nsLine.substring(from: lastEnd)
-            result.append(NSAttributedString(string: tail, attributes: [.font: font, .foregroundColor: defaultColor]))
-        }
-
-        return result
     }
 }
 
