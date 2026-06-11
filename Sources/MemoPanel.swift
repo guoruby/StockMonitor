@@ -16,6 +16,8 @@ class MemoPanel: NSPanel {
     private let memoId: String
     private(set) var editView: MemoTextView!
     private var previewView: NSTextView!
+    private var editScroll: NSScrollView!
+    private var previewScroll: NSScrollView!
     private var isClosing = false
     private var isCmdDragging = false
     private var cmdDragStartPos: NSPoint = .zero
@@ -66,10 +68,18 @@ class MemoPanel: NSPanel {
         let container = MemoContainerView(frame: NSRect(x: 0, y: 0, width: 200, height: 150))
         container.panel = self
 
-        let tvFrame = NSRect(x: 6, y: 4, width: 188, height: 142)
+        // 嵌入 scrollView 让 resize 时正确处理
+        let editScroll = NSScrollView(frame: NSRect(x: 6, y: 4, width: 188, height: 142))
+        editScroll.hasVerticalScroller = true
+        editScroll.hasHorizontalScroller = false
+        editScroll.borderType = .noBorder
+        editScroll.drawsBackground = false
+        editScroll.autohidesScrollers = true
+        editScroll.autoresizingMask = [.width, .height]
 
         // 编辑视图：纯文本
-        editView = MemoTextView(frame: tvFrame)
+        let contentSize = editScroll.contentSize
+        editView = MemoTextView(frame: NSRect(origin: .zero, size: contentSize))
         editView.font = NSFont.systemFont(ofSize: 13)
         editView.textColor = NSColor(calibratedRed: 0.2, green: 0.2, blue: 0.2, alpha: 1)
         editView.backgroundColor = .clear
@@ -82,16 +92,26 @@ class MemoPanel: NSPanel {
         editView.insertionPointColor = NSColor(calibratedRed: 0.3, green: 0.3, blue: 0.3, alpha: 1)
         editView.delegate = self
         editView.panel = self
-        editView.isVerticallyResizable = true
         editView.isHorizontallyResizable = false
-        editView.autoresizingMask = [.width, .height]
-        editView.textContainer?.containerSize = NSSize(width: tvFrame.width, height: CGFloat.greatestFiniteMagnitude)
+        editView.isVerticallyResizable = true
+        editView.autoresizingMask = [.width]
+        editView.textContainer?.containerSize = NSSize(width: contentSize.width, height: CGFloat.greatestFiniteMagnitude)
         editView.textContainer?.widthTracksTextView = true
         editView.string = text
-        container.addSubview(editView)
+        editScroll.documentView = editView
+        container.addSubview(editScroll)
 
         // 预览视图：富文本，不可编辑
-        previewView = NSTextView(frame: tvFrame)
+        let previewScroll = NSScrollView(frame: NSRect(x: 6, y: 4, width: 188, height: 142))
+        previewScroll.hasVerticalScroller = true
+        previewScroll.hasHorizontalScroller = false
+        previewScroll.borderType = .noBorder
+        previewScroll.drawsBackground = false
+        previewScroll.autohidesScrollers = true
+        previewScroll.autoresizingMask = [.width, .height]
+
+        let pSize = previewScroll.contentSize
+        previewView = NSTextView(frame: NSRect(origin: .zero, size: pSize))
         previewView.font = NSFont.systemFont(ofSize: 13)
         previewView.textColor = NSColor(calibratedRed: 0.2, green: 0.2, blue: 0.2, alpha: 1)
         previewView.backgroundColor = .clear
@@ -100,13 +120,18 @@ class MemoPanel: NSPanel {
         previewView.isSelectable = true
         previewView.isRichText = true
         previewView.isFieldEditor = false
-        previewView.isVerticallyResizable = true
         previewView.isHorizontallyResizable = false
-        previewView.autoresizingMask = [.width, .height]
-        previewView.textContainer?.containerSize = NSSize(width: tvFrame.width, height: CGFloat.greatestFiniteMagnitude)
+        previewView.isVerticallyResizable = true
+        previewView.autoresizingMask = [.width]
+        previewView.textContainer?.containerSize = NSSize(width: pSize.width, height: CGFloat.greatestFiniteMagnitude)
         previewView.textContainer?.widthTracksTextView = true
-        previewView.isHidden = true
-        container.addSubview(previewView)
+        previewScroll.documentView = previewView
+        previewScroll.isHidden = true
+        container.addSubview(previewScroll)
+
+        // 保存 scrollView 引用，方便 resize 时调整 textView 的 frame
+        self.editScroll = editScroll
+        self.previewScroll = previewScroll
 
         contentView = container
 
@@ -149,14 +174,10 @@ class MemoPanel: NSPanel {
     }
 
     private func layoutSubviews() {
-        guard let cv = contentView else { return }
-        let w = cv.bounds.width
-        let h = cv.bounds.height
-        let f = NSRect(x: 6, y: 4, width: w - 12, height: h - 8)
-        editView.frame = f
-        editView.textContainer?.containerSize = NSSize(width: w - 18, height: CGFloat.greatestFiniteMagnitude)
-        previewView.frame = f
-        previewView.textContainer?.containerSize = NSSize(width: w - 18, height: CGFloat.greatestFiniteMagnitude)
+        // scrollView 设置了 autoresizingMask=[.width,.height]，会自动跟随 contentView 调整大小
+        // textView 跟着 scrollView.contentSize 走，且 autoresizingMask=[.width] 跟随宽度
+        // 容器 resize 后，contentView 也会 resize，然后 scrollView 自动填满
+        // 这里不需要手动操作
     }
 
     override func mouseDown(with event: NSEvent) {
