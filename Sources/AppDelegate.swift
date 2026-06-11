@@ -75,7 +75,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusMenu.addItem(withTitle: "开始/停止监控", action: #selector(toggleMonitoring), keyEquivalent: "l")
         statusMenu.addItem(NSMenuItem.separator())
         statusMenu.addItem(withTitle: "新建便签", action: #selector(newMemo), keyEquivalent: "n")
-        statusMenu.addItem(withTitle: "打开便签...", action: #selector(openMemoMenu), keyEquivalent: "o")
+        let openMemoItem = statusMenu.addItem(withTitle: "打开便签", action: nil, keyEquivalent: "o")
+        openMemoItem.submenu = buildOpenMemoSubmenu()
         statusMenu.addItem(NSMenuItem.separator())
         statusMenu.addItem(withTitle: "设置...", action: #selector(openSettings), keyEquivalent: ",")
         statusMenu.addItem(withTitle: "打开日志文件夹", action: #selector(openLogFolder), keyEquivalent: "")
@@ -141,48 +142,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func showAllMemos() {
-        for memo in MemoStore.shared.memos {
-            if memoPanels[memo.id] == nil {
-                showMemoPanel(memo)
-            } else {
-                memoPanels[memo.id]?.orderFrontRegardless()
-            }
-        }
-    }
-
-    // 打开便签：动态生成子菜单列出所有便签
-    @objc private func openMemoMenu() {
-        let memos = MemoStore.shared.memos
-        if memos.isEmpty {
-            let alert = NSAlert()
-            alert.messageText = "暂无便签"
-            alert.informativeText = "请先通过「新建便签」创建一个。"
-            alert.addButton(withTitle: "好的")
-            alert.runModal()
-            return
-        }
-
+    // 构建便签子菜单（动态内容）
+    private func buildOpenMemoSubmenu() -> NSMenu {
         let menu = NSMenu(title: "打开便签")
-        for memo in memos {
-            let title = memoPreviewTitle(memo)
-            let item = NSMenuItem(title: title, action: #selector(openSpecificMemo(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = memo.id
-            if memoPanels[memo.id] != nil {
-                item.state = .on  // 已打开的标记
-            }
-            menu.addItem(item)
-        }
-        menu.addItem(NSMenuItem.separator())
-        let delItem = NSMenuItem(title: "管理（删除便签）...", action: #selector(manageMemos), keyEquivalent: "")
-        delItem.target = self
-        menu.addItem(delItem)
-
-        // 弹出在状态栏图标位置
-        if let button = statusItem.button, let window = button.window {
-            menu.popUp(positioning: nil, at: button.frame.origin, in: button)
-        }
+        menu.delegate = self
+        return menu
     }
 
     // 便签预览标题：第一行非空内容，超长截断
@@ -214,26 +178,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             panel.orderFrontRegardless()
         } else {
             showMemoPanel(memo)
-        }
-    }
-
-    // 管理便签：删除某个便签
-    @objc private func manageMemos() {
-        let memos = MemoStore.shared.memos
-        let menu = NSMenu(title: "管理便签")
-        for memo in memos {
-            let title = memoPreviewTitle(memo)
-            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-            let submenu = NSMenu()
-            let delItem = NSMenuItem(title: "删除", action: #selector(deleteMemo(_:)), keyEquivalent: "")
-            delItem.target = self
-            delItem.representedObject = memo.id
-            submenu.addItem(delItem)
-            item.submenu = submenu
-            menu.addItem(item)
-        }
-        if let button = statusItem.button {
-            menu.popUp(positioning: nil, at: button.frame.origin, in: button)
         }
     }
 
@@ -309,6 +253,32 @@ extension AppDelegate: NSMenuDelegate {
         if menu == statusMenu {
             let monitorItem = menu.items[safe: 2]
             monitorItem?.title = MonitorState.shared.isMonitoring ? "停止监控" : "开始监控"
+        } else if menu.title == "打开便签" {
+            // 动态刷新便签列表
+            menu.removeAllItems()
+            let memos = MemoStore.shared.memos
+            if memos.isEmpty {
+                menu.addItem(withTitle: "(暂无便签)", action: nil, keyEquivalent: "")
+                return
+            }
+            for memo in memos {
+                let title = memoPreviewTitle(memo)
+                let item = NSMenuItem(title: title, action: #selector(openSpecificMemo(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = memo.id
+                if memoPanels[memo.id] != nil {
+                    item.state = .on
+                }
+                menu.addItem(item)
+            }
+            menu.addItem(NSMenuItem.separator())
+            // 每个便签带一个删除子项
+            for memo in memos {
+                let delItem = NSMenuItem(title: "删除：\(memoPreviewTitle(memo))", action: #selector(deleteMemo(_:)), keyEquivalent: "")
+                delItem.target = self
+                delItem.representedObject = memo.id
+                menu.addItem(delItem)
+            }
         }
     }
 }
