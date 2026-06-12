@@ -86,7 +86,7 @@ class VWAPAnalyzer {
         )
     }
 
-    // MARK: - 量价形态分析（ComeMoney v6.1 逻辑）
+    // MARK: - 量价形态分析（ComeMoney v6.2 逻辑）
 
     static func analyze(data: StockData, trend: TrendIndicators) -> VWAPAnalysis {
         let price = data.price
@@ -223,13 +223,33 @@ class VWAPAnalyzer {
         // 卖出信号判定
         // ═══════════════════════════════════════
 
-        // 快速拉升判定：斜率上行+加速度为正+量能配合+峰值比>=0.7+非涨停
+        // 涨停判定
         let isLimitUp = data.upLimit > 0 && price >= data.upLimit * 0.998
+
+        // 放量上涨判定：近期持续刷新新高 + 量能配合
+        // 核心逻辑：价涨量涨时偏离均线是正常的，只要还在创新高就应持有
+        let isAdvancing = data.minutesSinceHigh < 10 && volRatioRecent >= 0.8
+
+        // 快速拉升判定：斜率上行+加速度为正+量能配合+峰值比>=0.7+非涨停
         let isSurging = (slopeDir == "up" && accPositive && volRatioRecent >= 0.6 && volPeakRatio >= 0.7) && !isLimitUp
 
-        // 1. 放量滞涨（最危险）
-        // 均线上方 + 偏离>2% + 放量(>1.5) + 峰值比(>=0.7) + 斜率下或减速 + 非快速拉升
-        if priceAboveVwap && vwapDistance > 2 && volRatioRecent > 1.5 && volPeakRatio >= 0.7 && (slopeDir == "down" || accNegative) && !isSurging {
+        // 1. 横盘缩量出货（优先级最高）
+        // 均线上方 + 15分钟无新高 + 缩量(<0.8) + 非放量上涨 + 非涨停
+        // 核心逻辑：无法刷新新高说明多头力竭，缩量说明资金在撤退
+        // 涨停封板时价格不变不会创新高，但不是出货
+        if priceAboveVwap && data.minutesSinceHigh >= 15 && volRatioRecent < 0.8 && !isAdvancing && !isSurging && !isLimitUp {
+            pattern = "横盘缩量出货"
+            sellSignal = true
+            var conf = 75
+            if data.minutesSinceHigh >= 30 { conf += 10 }
+            if volRatioRecent < 0.5 { conf += 5 }
+            if vwapDistance > 3 { conf += 5 }
+            confidence = min(90, conf)
+            reason = "横盘缩量出货+\(data.minutesSinceHigh)分钟无新高+\(volumeStatus)+偏离\(String(format: "%.1f", vwapDistance))%，减仓"
+        }
+        // 2. 放量滞涨（最危险）
+        // 均线上方 + 偏离>2% + 放量(>1.5) + 峰值比(>=0.7) + 斜率下或减速 + 非放量上涨/快速拉升/涨停
+        else if priceAboveVwap && vwapDistance > 2 && volRatioRecent > 1.5 && volPeakRatio >= 0.7 && (slopeDir == "down" || accNegative) && !isSurging && !isAdvancing && !isLimitUp {
             pattern = "放量滞涨"
             sellSignal = true
             var conf = 80
@@ -237,8 +257,9 @@ class VWAPAnalyzer {
             confidence = min(90, conf)
             reason = "放量滞涨+偏离\(String(format: "%.1f", vwapDistance))%+\(volumeStatus)+趋势走弱，全仓离场"
         }
-        // 2. 缩量上涨背离
-        else if priceAboveVwap && vwapDistance > 3 && volRatioRecent < 0.6 && !isSurging {
+        // 3. 缩量上涨背离
+        // 均线上方 + 偏离>3% + 缩量(<0.6) + 非放量上涨/快速拉升/涨停
+        else if priceAboveVwap && vwapDistance > 3 && volRatioRecent < 0.6 && !isSurging && !isAdvancing && !isLimitUp {
             pattern = "缩量上涨背离"
             sellSignal = true
             var conf = 75
@@ -246,8 +267,10 @@ class VWAPAnalyzer {
             confidence = min(85, conf)
             reason = "缩量上涨背离+偏离\(String(format: "%.1f", vwapDistance))%+\(volumeStatus)，减仓"
         }
-        // 3. 均线上方偏离
-        else if priceAboveVwap && vwapDistance > 3 && volRatioRecent >= 0.6 && !isSurging {
+        // 4. 均线上方偏离
+        // 均线上方 + 偏离>3% + 平量/放量 + 非放量上涨/快速拉升/涨停
+        // 放量上涨时偏离大是正常的，不触发此卖出信号
+        else if priceAboveVwap && vwapDistance > 3 && volRatioRecent >= 0.6 && !isSurging && !isAdvancing && !isLimitUp {
             pattern = "均线上方偏离"
             sellSignal = true
             var conf: Int
@@ -262,7 +285,7 @@ class VWAPAnalyzer {
             confidence = min(85, conf)
         }
 
-        // 4. 放量破位
+        // 5. 放量破位
         // 均线下方 + 偏离<-3% + 放量(>1.5) + 峰值比(>=0.7)
         if !priceAboveVwap && vwapDistance < -3 && volRatioRecent > 1.5 && volPeakRatio >= 0.7 {
             pattern = "放量破位"
@@ -270,7 +293,7 @@ class VWAPAnalyzer {
             confidence = 85
             reason = "放量破位+偏离\(String(format: "%.1f", vwapDistance))%+\(volumeStatus)，全仓离场"
         }
-        // 5. 尾盘放量破位
+        // 6. 尾盘放量破位
         else if period == "尾盘" && !priceAboveVwap && volRatioRecent > 2 {
             pattern = "尾盘放量破位"
             sellSignal = true

@@ -182,10 +182,17 @@ class MonitorState: ObservableObject {
                         // 计算回踩企稳指标：最大VWAP偏离、距全天最低点距离
                         var maxVwapDistance = 0.0
                         var dayLowDistance = 0.0
+                        var minutesSinceHigh = 0
                         if let minuteData = minuteData, minuteData.count >= 2, data.vwap > 0 {
                             let dayLow = minuteData.map { $0.price }.min() ?? data.price
                             dayLowDistance = dayLow > 0 ? (data.price - dayLow) / dayLow * 100 : 0
-                            for m in minuteData {
+                            var highestPrice = 0.0
+                            var lastHighIdx = 0
+                            for (i, m) in minuteData.enumerated() {
+                                if m.price > highestPrice {
+                                    highestPrice = m.price
+                                    lastHighIdx = i
+                                }
                                 if m.cumVol > 0 && m.price > 0 {
                                     let mVwap = m.cumAmt / (Double(m.cumVol) * 100.0)
                                     let mDist = mVwap > 0 ? (m.price - mVwap) / mVwap * 100 : 0
@@ -194,16 +201,18 @@ class MonitorState: ObservableObject {
                                     }
                                 }
                             }
+                            minutesSinceHigh = minuteData.count - 1 - lastHighIdx
                         }
 
-                        // 用计算好的回踩企稳指标重建StockData
+                        // 用计算好的指标重建StockData
                         let enrichedData = StockData(
                             name: data.name, code: data.code, price: data.price, prevClose: data.prevClose,
                             vwap: data.vwap, changePct: data.changePct, volume: data.volume, amount: data.amount,
                             volRatio: data.volRatio, open: data.open, high: data.high, low: data.low,
                             tradingPeriod: data.tradingPeriod, amplitude: data.amplitude,
                             upLimit: data.upLimit, downLimit: data.downLimit,
-                            maxVwapDistance: maxVwapDistance, dayLowDistance: dayLowDistance
+                            maxVwapDistance: maxVwapDistance, dayLowDistance: dayLowDistance,
+                            minutesSinceHigh: minutesSinceHigh
                         )
 
                         let analysis = VWAPAnalyzer.analyze(data: enrichedData, trend: trend)

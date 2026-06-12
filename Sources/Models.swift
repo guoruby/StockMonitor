@@ -104,6 +104,7 @@ struct StockData {
     let downLimit: Double
     let maxVwapDistance: Double  // 历史最大VWAP偏离(%)
     let dayLowDistance: Double   // 距全天最低点距离(%)
+    let minutesSinceHigh: Int    // 距上次刷新新高的分钟数
 }
 
 struct VWAPAnalysis {
