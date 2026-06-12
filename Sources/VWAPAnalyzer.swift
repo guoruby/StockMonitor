@@ -86,7 +86,7 @@ class VWAPAnalyzer {
         )
     }
 
-    // MARK: - 量价形态分析（ComeMoney v6.0 逻辑）
+    // MARK: - 量价形态分析（ComeMoney v6.1 逻辑）
 
     static func analyze(data: StockData, trend: TrendIndicators) -> VWAPAnalysis {
         let price = data.price
@@ -196,6 +196,20 @@ class VWAPAnalyzer {
                 confidence = min(70, conf)
                 reason = "横盘地量见底+零轴上方+\(volumeStatus)，底部信号"
             }
+        }
+
+        // ── 回踩VWAP企稳（独立于零轴过滤，零轴下方也可触发） ──
+        // 条件：价格曾偏离VWAP上方2%以上 → 回调到VWAP下方 → VWAP不跌 → 接近全天最低点
+        // 核心逻辑：VWAP不跌说明全天筹码成本没有下移，回调到均线附近是支撑买点
+        if !buySignal && !priceAboveVwap && data.maxVwapDistance >= 2.0 && (slopeDir == "flat" || slopeDir == "up") && data.dayLowDistance <= 1.5 {
+            pattern = "回踩企稳"
+            buySignal = true
+            var conf = 70
+            if data.maxVwapDistance >= 4 { conf += 10 }
+            if slopeDir == "up" { conf += 5 }
+            if vwapAboveZero { conf += 5 }
+            confidence = min(85, conf)
+            reason = "回踩VWAP企稳+曾偏离\(String(format: "%.1f", data.maxVwapDistance))%+VWAP\(slopeDir == "up" ? "上行" : "横盘")不跌+距低点\(String(format: "%.1f", data.dayLowDistance))%，支撑买点"
         }
 
         // ── 零轴下方弱势（无买入信号时） ──

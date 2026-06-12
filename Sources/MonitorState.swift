@@ -179,7 +179,34 @@ class MonitorState: ObservableObject {
                             Logger.shared.info("分时数据不足，降级使用实时VWAP")
                         }
 
-                        let analysis = VWAPAnalyzer.analyze(data: data, trend: trend)
+                        // 计算回踩企稳指标：最大VWAP偏离、距全天最低点距离
+                        var maxVwapDistance = 0.0
+                        var dayLowDistance = 0.0
+                        if let minuteData = minuteData, minuteData.count >= 2, data.vwap > 0 {
+                            let dayLow = minuteData.map { $0.price }.min() ?? data.price
+                            dayLowDistance = dayLow > 0 ? (data.price - dayLow) / dayLow * 100 : 0
+                            for m in minuteData {
+                                if m.cumVol > 0 && m.price > 0 {
+                                    let mVwap = m.cumAmt / (Double(m.cumVol) * 100.0)
+                                    let mDist = mVwap > 0 ? (m.price - mVwap) / mVwap * 100 : 0
+                                    if mDist > maxVwapDistance {
+                                        maxVwapDistance = mDist
+                                    }
+                                }
+                            }
+                        }
+
+                        // 用计算好的回踩企稳指标重建StockData
+                        let enrichedData = StockData(
+                            name: data.name, code: data.code, price: data.price, prevClose: data.prevClose,
+                            vwap: data.vwap, changePct: data.changePct, volume: data.volume, amount: data.amount,
+                            volRatio: data.volRatio, open: data.open, high: data.high, low: data.low,
+                            tradingPeriod: data.tradingPeriod, amplitude: data.amplitude,
+                            upLimit: data.upLimit, downLimit: data.downLimit,
+                            maxVwapDistance: maxVwapDistance, dayLowDistance: dayLowDistance
+                        )
+
+                        let analysis = VWAPAnalyzer.analyze(data: enrichedData, trend: trend)
                         self.signal = analysis.signal
                         self.pattern = analysis.pattern
                         self.patternReason = analysis.reason

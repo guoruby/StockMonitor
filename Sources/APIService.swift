@@ -189,7 +189,8 @@ class APIService {
                 vwap: vwap, changePct: changePct, volume: volume, amount: amount,
                 volRatio: volRatio, open: openPrice, high: high, low: low,
                 tradingPeriod: tradingPeriod, amplitude: amplitude,
-                upLimit: upLimit, downLimit: downLimit
+                upLimit: upLimit, downLimit: downLimit,
+                maxVwapDistance: 0, dayLowDistance: 0
             )
             completion(.success(stockData))
         }.resume()
