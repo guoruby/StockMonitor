@@ -183,15 +183,22 @@ class MonitorState: ObservableObject {
                         var maxVwapDistance = 0.0
                         var dayLowDistance = 0.0
                         var minutesSinceHigh = 0
+                        var minutesSinceVolHigh = 0
                         if let minuteData = minuteData, minuteData.count >= 2, data.vwap > 0 {
                             let dayLow = minuteData.map { $0.price }.min() ?? data.price
                             dayLowDistance = dayLow > 0 ? (data.price - dayLow) / dayLow * 100 : 0
                             var highestPrice = 0.0
                             var lastHighIdx = 0
+                            var highestVol = 0
+                            var lastVolHighIdx = 0
                             for (i, m) in minuteData.enumerated() {
                                 if m.price > highestPrice {
                                     highestPrice = m.price
                                     lastHighIdx = i
+                                }
+                                if m.minuteVol > highestVol {
+                                    highestVol = m.minuteVol
+                                    lastVolHighIdx = i
                                 }
                                 if m.cumVol > 0 && m.price > 0 {
                                     let mVwap = m.cumAmt / (Double(m.cumVol) * 100.0)
@@ -202,6 +209,7 @@ class MonitorState: ObservableObject {
                                 }
                             }
                             minutesSinceHigh = minuteData.count - 1 - lastHighIdx
+                            minutesSinceVolHigh = minuteData.count - 1 - lastVolHighIdx
                         }
 
                         // 用计算好的指标重建StockData
@@ -212,7 +220,7 @@ class MonitorState: ObservableObject {
                             tradingPeriod: data.tradingPeriod, amplitude: data.amplitude,
                             upLimit: data.upLimit, downLimit: data.downLimit,
                             maxVwapDistance: maxVwapDistance, dayLowDistance: dayLowDistance,
-                            minutesSinceHigh: minutesSinceHigh
+                            minutesSinceHigh: minutesSinceHigh, minutesSinceVolHigh: minutesSinceVolHigh
                         )
 
                         let analysis = VWAPAnalyzer.analyze(data: enrichedData, trend: trend)

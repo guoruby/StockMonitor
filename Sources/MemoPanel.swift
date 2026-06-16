@@ -68,7 +68,7 @@ class MemoPanel: NSPanel {
         container.panel = self
 
         // === 编辑 ScrollView + TextView ===
-        let editScroll = NSScrollView(frame: NSRect(x: 6, y: 4, width: 188, height: 142))
+        let editScroll = MemoScrollView(frame: NSRect(x: 6, y: 4, width: 188, height: 142))
         editScroll.hasVerticalScroller = true
         editScroll.hasHorizontalScroller = false
         editScroll.borderType = .noBorder
@@ -90,6 +90,7 @@ class MemoPanel: NSPanel {
         editView.insertionPointColor = NSColor(calibratedRed: 0.3, green: 0.3, blue: 0.3, alpha: 1)
         editView.delegate = self
         editView.panel = self
+        editScroll.panel = self
         editView.isHorizontallyResizable = false
         editView.isVerticallyResizable = true
         editView.autoresizingMask = [.width]
@@ -100,7 +101,7 @@ class MemoPanel: NSPanel {
         container.addSubview(editScroll)
 
         // === 预览 ScrollView + TextView ===
-        let previewScroll = NSScrollView(frame: NSRect(x: 6, y: 4, width: 188, height: 142))
+        let previewScroll = MemoScrollView(frame: NSRect(x: 6, y: 4, width: 188, height: 142))
         previewScroll.hasVerticalScroller = true
         previewScroll.hasHorizontalScroller = false
         previewScroll.borderType = .noBorder
@@ -118,6 +119,8 @@ class MemoPanel: NSPanel {
         previewView.isSelectable = true
         previewView.isRichText = true
         previewView.isFieldEditor = false
+        previewView.panel = self
+        previewScroll.panel = self
         previewView.isHorizontallyResizable = false
         previewView.isVerticallyResizable = true
         previewView.autoresizingMask = [.width]
@@ -130,10 +133,6 @@ class MemoPanel: NSPanel {
         self.previewScroll = previewScroll
 
         contentView = container
-
-        // 添加 Cmd+拖拽手势识别器到 contentView
-        let dragGesture = MemoDragGestureRecognizer(target: self, action: #selector(handleDragGesture(_:)))
-        container.addGestureRecognizer(dragGesture)
 
         NotificationCenter.default.addObserver(
             forName: NSWindow.didResizeNotification, object: self, queue: .main
@@ -181,25 +180,9 @@ class MemoPanel: NSPanel {
 
     // MARK: - Cmd+拖拽
 
-    private var dragStartPos = NSPoint.zero
-    private var dragStartFrameOrigin = NSPoint.zero
-
-    @objc private func handleDragGesture(_ gesture: MemoDragGestureRecognizer) {
-        switch gesture.state {
-        case .began:
-            dragStartPos = NSEvent.mouseLocation
-            dragStartFrameOrigin = frame.origin
-        case .changed:
-            let currentPos = NSEvent.mouseLocation
-            setFrameOrigin(NSPoint(
-                x: dragStartFrameOrigin.x + (currentPos.x - dragStartPos.x),
-                y: dragStartFrameOrigin.y + (currentPos.y - dragStartPos.y)
-            ))
-        case .ended:
-            savePosition()
-        default:
-            break
-        }
+    func beginWindowDrag(with event: NSEvent) {
+        performDrag(with: event)
+        savePosition()
     }
 
     // MARK: - 右键菜单
@@ -388,12 +371,26 @@ class MemoContainerView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        // 非Cmd点击 → 进入编辑态
-        if !event.modifierFlags.contains(.command) {
-            panel?.makeKeyAndOrderFront(nil)
-            panel?.editView.window?.makeFirstResponder(panel?.editView)
+        if event.modifierFlags.contains(.command) {
+            panel?.beginWindowDrag(with: event)
+            return
         }
-        // Cmd+点击拖拽由手势识别器处理，这里不拦截
+
+        // 非Cmd点击 → 进入编辑态
+        panel?.makeKeyAndOrderFront(nil)
+        panel?.editView.window?.makeFirstResponder(panel?.editView)
+        super.mouseDown(with: event)
+    }
+}
+
+class MemoScrollView: NSScrollView {
+    weak var panel: MemoPanel?
+
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.command) {
+            panel?.beginWindowDrag(with: event)
+            return
+        }
         super.mouseDown(with: event)
     }
 }
@@ -408,54 +405,19 @@ class MemoTextView: NSTextView {
         return nil
     }
 
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.command) {
+            panel?.beginWindowDrag(with: event)
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "a" {
             return super.performKeyEquivalent(with: event)
         }
         return false
-    }
-}
-
-// MARK: - Cmd+拖拽手势识别器
-//
-// 核心思路：用 NSGestureRecognizer 统一处理 Cmd+拖拽，
-// 不依赖任何特定 NSView 的 mouseDown/mouseDragged/mouseUp。
-// 手势识别器挂载在 contentView 上，无论事件被哪个子视图接收，
-// 只要 Cmd 键按下，手势识别器都能捕获。
-
-class MemoDragGestureRecognizer: NSGestureRecognizer {
-    private var isDragging = false
-
-    override func mouseDown(with event: NSEvent) {
-        if event.modifierFlags.contains(.command) {
-            isDragging = true
-            state = .began
-        } else {
-            isDragging = false
-            super.mouseDown(with: event)
-        }
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        if isDragging {
-            state = .changed
-        } else {
-            super.mouseDragged(with: event)
-        }
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        if isDragging {
-            isDragging = false
-            state = .ended
-        } else {
-            super.mouseUp(with: event)
-        }
-    }
-
-    override func reset() {
-        isDragging = false
-        super.reset()
     }
 }
 

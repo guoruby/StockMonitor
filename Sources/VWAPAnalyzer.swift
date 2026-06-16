@@ -220,30 +220,52 @@ class VWAPAnalyzer {
         }
 
         // ═══════════════════════════════════════
+        // 硬规则：偏离VWAP超过6%，3分钟内创新高可豁免
+        // ═══════════════════════════════════════
+
+        // 高于均价6%以上：必须卖出，但3分钟内刚创新高说明还在冲，暂缓
+        if vwapDistance > 6 && data.minutesSinceHigh >= 3 {
+            pattern = "偏离均线止盈"
+            sellSignal = true
+            confidence = 90
+            reason = "偏离VWAP+\(String(format: "%.1f", vwapDistance))%≥6%且\(data.minutesSinceHigh)分钟未创新高，必须卖出"
+            if buySignal { buySignal = false }
+            // 卖出优先，直接跳过后续卖出判定
+        }
+        // 低于均价6%以上：买入信号，均值回归机会
+        else if vwapDistance < -6 {
+            pattern = "偏离均线抄底"
+            buySignal = true
+            confidence = 80
+            reason = "偏离VWAP\(String(format: "%.1f", vwapDistance))%≤-6%，偏离过大，均值回归买点"
+        }
+
+        // ═══════════════════════════════════════
         // 卖出信号判定
         // ═══════════════════════════════════════
 
         // 涨停判定
         let isLimitUp = data.upLimit > 0 && price >= data.upLimit * 0.998
 
-        // 放量上涨判定：近期持续刷新新高 + 量能配合
-        // 核心逻辑：价涨量涨时偏离均线是正常的，只要还在创新高就应持有
-        let isAdvancing = data.minutesSinceHigh < 10 && volRatioRecent >= 0.8
+        // 放量上涨持有判定：偏离>3%时，15分钟内价格创新高 + 15分钟内量能创新高
+        // 核心逻辑：价量齐创新高说明多头仍在进攻，偏离是正常的，不触发卖出
+        // 两个条件缺一不可：只有价创新高但量没跟上→量价背离；只有量创新高但价没跟上→放量滞涨
+        let isAdvancing = data.minutesSinceHigh < 15 && data.minutesSinceVolHigh < 15
 
         // 快速拉升判定：斜率上行+加速度为正+量能配合+峰值比>=0.7+非涨停
         let isSurging = (slopeDir == "up" && accPositive && volRatioRecent >= 0.6 && volPeakRatio >= 0.7) && !isLimitUp
 
         // 1. 横盘缩量出货（优先级最高）
-        // 均线上方 + 15分钟无新高 + 缩量(<0.8) + 非放量上涨 + 非涨停
+        // 均线上方 + 偏离≥3% + 15分钟无新高 + 缩量(<0.8) + 非价量齐创新高 + 非涨停
         // 核心逻辑：无法刷新新高说明多头力竭，缩量说明资金在撤退
         // 涨停封板时价格不变不会创新高，但不是出货
-        if priceAboveVwap && data.minutesSinceHigh >= 15 && volRatioRecent < 0.8 && !isAdvancing && !isSurging && !isLimitUp {
+        if priceAboveVwap && vwapDistance >= 3 && data.minutesSinceHigh >= 15 && volRatioRecent < 0.8 && !isAdvancing && !isSurging && !isLimitUp {
             pattern = "横盘缩量出货"
             sellSignal = true
             var conf = 75
             if data.minutesSinceHigh >= 30 { conf += 10 }
             if volRatioRecent < 0.5 { conf += 5 }
-            if vwapDistance > 3 { conf += 5 }
+            if vwapDistance > 5 { conf += 5 }
             confidence = min(90, conf)
             reason = "横盘缩量出货+\(data.minutesSinceHigh)分钟无新高+\(volumeStatus)+偏离\(String(format: "%.1f", vwapDistance))%，减仓"
         }
