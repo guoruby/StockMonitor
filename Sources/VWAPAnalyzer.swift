@@ -92,7 +92,6 @@ class VWAPAnalyzer {
         let price = data.price
         let vwap = trend.vwap > 0 ? trend.vwap : data.vwap
         let prevClose = data.prevClose
-        let period = data.tradingPeriod
 
         let vwapDistance = vwap > 0 ? (price - vwap) / vwap * 100 : 0
         let priceAboveVwap = price > vwap
@@ -261,9 +260,10 @@ class VWAPAnalyzer {
             let isSurging = (slopeDir == "up" && accPositive && volRatioRecent >= 0.6 && volPeakRatio >= 0.7) && !isLimitUp
 
             // 0. 量价背离卖点（10:14-10:46窗口，最高优先级）
-            // 均线为正(VWAP>早盘10分钟均值最高 且 零轴上方) + 量为负(今日量能弱于昨日) + 价新高但量非新高
+            // 均线为负(VWAP弱于早盘 或 零轴下方) + 量为负(今日量能弱于昨日) + 价新高但量非新高
+            // 均线为正说明是缩量上涨，交给后续卖点C/F处理
             if let div = data.divergence, div.inWindow, div.earlyVwapMax > 0, !isLimitUp,
-               vwap > div.earlyVwapMax, vwap > prevClose,
+               vwap < div.earlyVwapMax || vwap < prevClose,
                data.minutesSinceHigh == 0, data.minutesSinceVolHigh > 0,
                (div.yesterdayMaxVol > 0 && div.todayMaxMinuteVol < div.yesterdayMaxVol)
                || (div.yesterdayCumVolToNow > 0 && Double(div.currentCumVol) / Double(div.yesterdayCumVolToNow) <= 1.3) {
@@ -274,7 +274,8 @@ class VWAPAnalyzer {
                 let volNeg1 = div.yesterdayMaxVol > 0 && div.todayMaxMinuteVol < div.yesterdayMaxVol
                 let volNeg2 = div.yesterdayCumVolToNow > 0 && Double(div.currentCumVol) / Double(div.yesterdayCumVolToNow) <= 1.3
                 let bothCond = volNeg1 && volNeg2 ? "双重缩量确认" : "缩量"
-                reason = "量价背离卖点+\(bothCond)+价新高但量非新高+均线\(String(format: "%.2f", vwap))高于早盘均值\(String(format: "%.2f", div.earlyVwapMax))，日内最佳卖点"
+                let maStatus = vwap < div.earlyVwapMax ? "均线下行" : "零轴下方"
+                reason = "量价背离卖点+\(bothCond)+价新高但量非新高+均线为负(\(maStatus))，日内最佳卖点"
                 if buySignal { buySignal = false }
             }
             // 1. 横盘缩量出货（优先级最高）
@@ -291,27 +292,7 @@ class VWAPAnalyzer {
                 confidence = min(90, conf)
                 reason = "横盘缩量出货+\(data.minutesSinceHigh)分钟无新高+\(volumeStatus)+偏离\(String(format: "%.1f", vwapDistance))%，减仓"
             }
-            // 2. 放量滞涨（最危险）
-            // 均线上方 + 偏离>2% + 放量(>1.5) + 峰值比(>=0.7) + 斜率下或减速 + 非放量上涨/快速拉升/涨停
-            else if priceAboveVwap && vwapDistance > 2 && volRatioRecent > 1.5 && volPeakRatio >= 0.7 && (slopeDir == "down" || accNegative) && !isSurging && !isAdvancing && !isLimitUp {
-                pattern = "放量滞涨"
-                sellSignal = true
-                var conf = 80
-                if slopeDir == "down" { conf += 10 }
-                confidence = min(90, conf)
-                reason = "放量滞涨+偏离\(String(format: "%.1f", vwapDistance))%+\(volumeStatus)+趋势走弱，全仓离场"
-            }
-            // 3. 缩量上涨背离
-            // 均线上方 + 偏离>3% + 缩量(<0.6) + 非放量上涨/快速拉升/涨停
-            else if priceAboveVwap && vwapDistance > 3 && volRatioRecent < 0.6 && !isSurging && !isAdvancing && !isLimitUp {
-                pattern = "缩量上涨背离"
-                sellSignal = true
-                var conf = 75
-                if vwapDistance > 5 { conf += 10 }
-                confidence = min(85, conf)
-                reason = "缩量上涨背离+偏离\(String(format: "%.1f", vwapDistance))%+\(volumeStatus)，减仓"
-            }
-            // 4. 均线上方偏离
+            // 2. 均线上方偏离
             // 均线上方 + 偏离>3% + 平量/放量 + 非放量上涨/快速拉升/涨停
             // 放量上涨时偏离大是正常的，不触发此卖出信号
             else if priceAboveVwap && vwapDistance > 3 && volRatioRecent >= 0.6 && !isSurging && !isAdvancing && !isLimitUp {
@@ -329,21 +310,6 @@ class VWAPAnalyzer {
                 confidence = min(85, conf)
             }
 
-            // 5. 放量破位
-            // 均线下方 + 偏离<-3% + 放量(>1.5) + 峰值比(>=0.7)
-            if !priceAboveVwap && vwapDistance < -3 && volRatioRecent > 1.5 && volPeakRatio >= 0.7 {
-                pattern = "放量破位"
-                sellSignal = true
-                confidence = 85
-                reason = "放量破位+偏离\(String(format: "%.1f", vwapDistance))%+\(volumeStatus)，全仓离场"
-            }
-            // 6. 尾盘放量破位
-            else if period == "尾盘" && !priceAboveVwap && volRatioRecent > 2 {
-                pattern = "尾盘放量破位"
-                sellSignal = true
-                confidence = 75
-                reason = "尾盘放量破均线，明日可能继续跌"
-            }
         }
 
         // 买卖互斥：卖出优先
