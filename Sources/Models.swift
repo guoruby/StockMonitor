@@ -73,6 +73,16 @@ struct MinuteData {
     let minuteVol: Int    // 当分钟成交量(手)
 }
 
+// 量价背离卖点策略数据（10:14-10:46窗口内，分时均线+量比+时间窗口三维判断）
+struct DivergenceData {
+    let inWindow: Bool              // 是否在10:14-10:46时间窗口内
+    let yesterdayMaxVol: Int        // 昨日全天最大分钟成交量
+    let yesterdayCumVolToNow: Int   // 昨日开盘到当前时刻的累计成交量
+    let earlyVwapMax: Double        // 早盘10分钟(9:30-9:39)内VWAP最大值
+    let todayMaxMinuteVol: Int      // 今日最大分钟成交量
+    let currentCumVol: Int          // 今日截至当前累计成交量
+}
+
 struct TrendIndicators {
     let vwap: Double
     let vwapVsZero: Double    // VWAP相对昨收价%
@@ -106,6 +116,7 @@ struct StockData {
     let dayLowDistance: Double   // 距全天最低点距离(%)
     let minutesSinceHigh: Int    // 距上次刷新新高的分钟数
     let minutesSinceVolHigh: Int // 距上次量能创新高的分钟数
+    let divergence: DivergenceData? // 量价背离卖点策略数据
 }
 
 struct VWAPAnalysis {
@@ -117,6 +128,7 @@ struct VWAPAnalysis {
     let volumeStatus: String
     let buySignal: Bool
     let sellSignal: Bool
+    let divergenceSell: Bool  // 量价背离卖点触发
 }
 
 struct MemoItem: Codable {

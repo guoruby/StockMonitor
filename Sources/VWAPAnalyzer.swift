@@ -134,6 +134,7 @@ class VWAPAnalyzer {
         var sellSignal = false
         var confidence = 50
         var reason = ""
+        var divergenceSell = false
 
         // ═══════════════════════════════════════
         // 买入信号（按优先级，首个匹配即止）
@@ -259,11 +260,28 @@ class VWAPAnalyzer {
             // 快速拉升判定：斜率上行+加速度为正+量能配合+峰值比>=0.7+非涨停
             let isSurging = (slopeDir == "up" && accPositive && volRatioRecent >= 0.6 && volPeakRatio >= 0.7) && !isLimitUp
 
+            // 0. 量价背离卖点（10:14-10:46窗口，最高优先级）
+            // 均线为正(VWAP>早盘10分钟均值最高 且 零轴上方) + 量为负(今日量能弱于昨日) + 价新高但量非新高
+            if let div = data.divergence, div.inWindow, div.earlyVwapMax > 0, !isLimitUp,
+               vwap > div.earlyVwapMax, vwap > prevClose,
+               data.minutesSinceHigh == 0, data.minutesSinceVolHigh > 0,
+               (div.yesterdayMaxVol > 0 && div.todayMaxMinuteVol < div.yesterdayMaxVol)
+               || (div.yesterdayCumVolToNow > 0 && Double(div.currentCumVol) / Double(div.yesterdayCumVolToNow) <= 1.3) {
+                pattern = "量价背离卖点"
+                sellSignal = true
+                divergenceSell = true
+                confidence = 85
+                let volNeg1 = div.yesterdayMaxVol > 0 && div.todayMaxMinuteVol < div.yesterdayMaxVol
+                let volNeg2 = div.yesterdayCumVolToNow > 0 && Double(div.currentCumVol) / Double(div.yesterdayCumVolToNow) <= 1.3
+                let bothCond = volNeg1 && volNeg2 ? "双重缩量确认" : "缩量"
+                reason = "量价背离卖点+\(bothCond)+价新高但量非新高+均线\(String(format: "%.2f", vwap))高于早盘均值\(String(format: "%.2f", div.earlyVwapMax))，日内最佳卖点"
+                if buySignal { buySignal = false }
+            }
             // 1. 横盘缩量出货（优先级最高）
             // 均线上方 + 偏离≥3% + 15分钟无新高 + 缩量(<0.8) + 非价量齐创新高 + 非涨停
             // 核心逻辑：无法刷新新高说明多头力竭，缩量说明资金在撤退
             // 涨停封板时价格不变不会创新高，但不是出货
-            if priceAboveVwap && vwapDistance >= 3 && data.minutesSinceHigh >= 15 && volRatioRecent < 0.8 && !isAdvancing && !isSurging && !isLimitUp {
+            else if priceAboveVwap && vwapDistance >= 3 && data.minutesSinceHigh >= 15 && volRatioRecent < 0.8 && !isAdvancing && !isSurging && !isLimitUp {
                 pattern = "横盘缩量出货"
                 sellSignal = true
                 var conf = 75
@@ -367,7 +385,8 @@ class VWAPAnalyzer {
             signal: signal, recommendation: recommendation,
             pattern: pattern, reason: reason,
             confidence: confidence, volumeStatus: volumeStatus,
-            buySignal: buySignal, sellSignal: sellSignal
+            buySignal: buySignal, sellSignal: sellSignal,
+            divergenceSell: divergenceSell
         )
     }
 }

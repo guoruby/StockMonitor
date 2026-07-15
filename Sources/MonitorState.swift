@@ -39,6 +39,13 @@ class MonitorState: ObservableObject {
     private var shakeStep: Int = 0
     private var nameToCodeCache: [String: String] = [:]
 
+    // 量价背离卖点策略状态
+    private var yesterdayDataCache: [String: [MinuteData]] = [:]
+    private var yesterdayFetchingCodes: Set<String> = []
+    private var divergenceTriggered: Bool = false
+    private var divergenceTriggerTime: Date?
+    private var lastFetchCode: String = ""
+
     func toggleMonitoring() {
         isMonitoring.toggle()
         NotificationCenter.default.post(name: .monitoringStateChanged, object: nil)
@@ -149,6 +156,26 @@ class MonitorState: ObservableObject {
     }
 
     private func fetchAPIData(code: String) {
+        // 换股时清除量价背离状态
+        if code != lastFetchCode {
+            divergenceTriggered = false
+            divergenceTriggerTime = nil
+            lastFetchCode = code
+        }
+
+        // 异步获取昨日分时数据（仅首次，之后从缓存读取）
+        if yesterdayDataCache[code] == nil && !yesterdayFetchingCodes.contains(code) {
+            yesterdayFetchingCodes.insert(code)
+            APIService.shared.fetchYesterdayMinuteData(stockCode: code) { [weak self] result in
+                guard let self = self else { return }
+                if let result = result {
+                    self.yesterdayDataCache[code] = result
+                    Logger.shared.info("昨日分时数据已缓存: \(code) 共\(result.count)条")
+                }
+                self.yesterdayFetchingCodes.remove(code)
+            }
+        }
+
         // 同时请求实时行情和分时数据
         APIService.shared.fetchRealtimeData(stockCode: code) { [weak self] result in
             guard let self = self else { return }
@@ -212,6 +239,44 @@ class MonitorState: ObservableObject {
                             minutesSinceVolHigh = minuteData.count - 1 - lastVolHighIdx
                         }
 
+                        // 量价背离卖点指标（10:14-10:46窗口）
+                        var divergenceData: DivergenceData? = nil
+                        let divCal = Calendar.current
+                        let divHH = divCal.component(.hour, from: Date())
+                        let divMM = divCal.component(.minute, from: Date())
+                        let currentHHMM = divHH * 100 + divMM
+                        let inWindow = currentHHMM >= 1014 && currentHHMM <= 1046
+
+                        if inWindow, let yData = self.yesterdayDataCache[code] {
+                            var todayMaxVol = 0
+                            var curCumVol = 0
+                            var earlyVMax = 0.0
+                            if let mData = minuteData {
+                                for m in mData {
+                                    if m.minuteVol > todayMaxVol { todayMaxVol = m.minuteVol }
+                                    curCumVol = m.cumVol
+                                    if let t = Int(m.time), t >= 930 && t <= 939, m.cumVol > 0 {
+                                        let v = m.cumAmt / (Double(m.cumVol) * 100.0)
+                                        if v > earlyVMax { earlyVMax = v }
+                                    }
+                                }
+                            }
+                            var yMaxVol = 0
+                            var yCumToNow = 0
+                            for m in yData {
+                                if m.minuteVol > yMaxVol { yMaxVol = m.minuteVol }
+                                if let t = Int(m.time), t <= currentHHMM { yCumToNow = m.cumVol }
+                            }
+                            divergenceData = DivergenceData(
+                                inWindow: true,
+                                yesterdayMaxVol: yMaxVol,
+                                yesterdayCumVolToNow: yCumToNow,
+                                earlyVwapMax: earlyVMax,
+                                todayMaxMinuteVol: todayMaxVol,
+                                currentCumVol: curCumVol
+                            )
+                        }
+
                         // 用计算好的指标重建StockData
                         let enrichedData = StockData(
                             name: data.name, code: data.code, price: data.price, prevClose: data.prevClose,
@@ -220,7 +285,8 @@ class MonitorState: ObservableObject {
                             tradingPeriod: data.tradingPeriod, amplitude: data.amplitude,
                             upLimit: data.upLimit, downLimit: data.downLimit,
                             maxVwapDistance: maxVwapDistance, dayLowDistance: dayLowDistance,
-                            minutesSinceHigh: minutesSinceHigh, minutesSinceVolHigh: minutesSinceVolHigh
+                            minutesSinceHigh: minutesSinceHigh, minutesSinceVolHigh: minutesSinceVolHigh,
+                            divergence: divergenceData
                         )
 
                         let analysis = VWAPAnalyzer.analyze(data: enrichedData, trend: trend)
@@ -231,6 +297,35 @@ class MonitorState: ObservableObject {
                         self.recommendation = analysis.recommendation
                         self.buySignal = analysis.buySignal
                         self.sellSignal = analysis.sellSignal
+
+                        // 量价背离卖点持续15分钟逻辑
+                        if analysis.divergenceSell {
+                            self.divergenceTriggered = true
+                            self.divergenceTriggerTime = Date()
+                            Logger.shared.info("量价背离卖点触发，进入15分钟持续期")
+                        } else if self.divergenceTriggered {
+                            if let triggerTime = self.divergenceTriggerTime,
+                               Date().timeIntervalSince(triggerTime) < 15 * 60 {
+                                // 爆量拉升判断：近期量比>=2.0 且 均价斜率向上
+                                if trend.volRatioRecent >= 2.0 && trend.slope > 0 {
+                                    self.divergenceTriggered = false
+                                    self.divergenceTriggerTime = nil
+                                    Logger.shared.info("量价背离持续期内出现爆量拉升，解除卖出信号")
+                                } else {
+                                    self.sellSignal = true
+                                    self.signal = "sell"
+                                    self.recommendation = "sell"
+                                    self.pattern = "量价背离卖点(持续)"
+                                    self.patternReason = "量价背离触发后15分钟持续卖出"
+                                    self.patternConfidence = 80
+                                    Logger.shared.info("量价背离持续卖出中")
+                                }
+                            } else {
+                                self.divergenceTriggered = false
+                                self.divergenceTriggerTime = nil
+                                Logger.shared.info("量价背离持续期结束(15分钟)")
+                            }
+                        }
 
                         switch analysis.signal {
                         case "strong": self.trendText = "↑ 多头"

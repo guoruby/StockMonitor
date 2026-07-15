@@ -190,7 +190,8 @@ class APIService {
                 volRatio: volRatio, open: openPrice, high: high, low: low,
                 tradingPeriod: tradingPeriod, amplitude: amplitude,
                 upLimit: upLimit, downLimit: downLimit,
-                maxVwapDistance: 0, dayLowDistance: 0, minutesSinceHigh: 0, minutesSinceVolHigh: 0
+                maxVwapDistance: 0, dayLowDistance: 0, minutesSinceHigh: 0, minutesSinceVolHigh: 0,
+                divergence: nil
             )
             completion(.success(stockData))
         }.resume()
@@ -249,6 +250,86 @@ class APIService {
             }
 
             Logger.shared.info("分时数据: \(stockCode) 共\(result.count)条")
+            completion(result.count > 0 ? result : nil)
+        }.resume()
+    }
+
+    // MARK: - 昨日分时数据（5日分时接口）
+
+    func fetchYesterdayMinuteData(stockCode: String, completion: @escaping ([MinuteData]?) -> Void) {
+        let tencentCode: String
+        if stockCode.hasPrefix("6") {
+            tencentCode = "sh\(stockCode)"
+        } else if stockCode.hasPrefix("0") || stockCode.hasPrefix("3") {
+            tencentCode = "sz\(stockCode)"
+        } else {
+            tencentCode = stockCode
+        }
+
+        let urlStr = "https://web.ifzq.gtimg.cn/appstock/app/day/query?code=\(tencentCode)&args=2"
+        guard let url = URL(string: urlStr) else {
+            completion(nil)
+            return
+        }
+
+        session.dataTask(with: url) { data, _, error in
+            if error != nil || data == nil {
+                completion(nil)
+                return
+            }
+
+            guard let text = String(data: data!, encoding: .utf8) else {
+                completion(nil)
+                return
+            }
+
+            // 解析JSON: data.{tencentCode}.data 是数组，每个元素含 date + data(字符串数组)
+            guard let jsonData = text.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                  let dataDict = json["data"] as? [String: Any],
+                  let stockDict = dataDict[tencentCode] as? [String: Any],
+                  let dayDataArray = stockDict["data"] as? [[String: Any]] else {
+                Logger.shared.error("昨日分时JSON解析失败: \(stockCode)")
+                completion(nil)
+                return
+            }
+
+            // dayDataArray[0]=今天, [1]=昨天
+            guard dayDataArray.count >= 2 else {
+                Logger.shared.info("昨日分时数据不足: \(stockCode) 仅\(dayDataArray.count)天")
+                completion(nil)
+                return
+            }
+
+            guard let minuteStrings = dayDataArray[1]["data"] as? [String] else {
+                completion(nil)
+                return
+            }
+
+            let pattern = "(\\d{4})\\s+([\\d.]+)\\s+(\\d+)\\s+([\\d.]+)"
+            guard let regex = try? NSRegularExpression(pattern: pattern) else {
+                completion(nil)
+                return
+            }
+
+            var result: [MinuteData] = []
+            var prevCumVol = 0
+
+            for str in minuteStrings {
+                let matches = regex.matches(in: str, range: NSRange(str.startIndex..., in: str))
+                for match in matches {
+                    guard match.numberOfRanges == 5 else { continue }
+                    let timeStr = String(str[Range(match.range(at: 1), in: str)!])
+                    let price = Double(String(str[Range(match.range(at: 2), in: str)!])) ?? 0
+                    let cumVol = Int(String(str[Range(match.range(at: 3), in: str)!])) ?? 0
+                    let cumAmt = Double(String(str[Range(match.range(at: 4), in: str)!])) ?? 0
+                    let minuteVol = cumVol - prevCumVol
+                    prevCumVol = cumVol
+                    result.append(MinuteData(time: timeStr, price: price, cumVol: cumVol, cumAmt: cumAmt, minuteVol: minuteVol))
+                }
+            }
+
+            Logger.shared.info("昨日分时数据: \(stockCode) 共\(result.count)条")
             completion(result.count > 0 ? result : nil)
         }.resume()
     }
