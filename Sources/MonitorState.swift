@@ -260,11 +260,12 @@ class MonitorState: ObservableObject {
                                         let v = m.cumAmt / (Double(m.cumVol) * 100.0)
                                         if v > earlyVMax { earlyVMax = v }
                                     }
-                                    // 收集每根分钟线的价格偏离VWAP百分比
+                                    // 收集每根分钟线的价格偏离VWAP百分比（只收集正偏离：价格高于均线）
                                     if m.cumVol > 0 {
                                         let mVwap = m.cumAmt / (Double(m.cumVol) * 100.0)
                                         if mVwap > 0 {
-                                            priceDistances.append((m.price - mVwap) / mVwap * 100)
+                                            let dist = (m.price - mVwap) / mVwap * 100
+                                            if dist > 0 { priceDistances.append(dist) }
                                         }
                                     }
                                 }

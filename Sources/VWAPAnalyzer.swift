@@ -264,7 +264,7 @@ class VWAPAnalyzer {
             // 均线为正说明是缩量上涨，交给后续卖点C/F处理
             if let div = data.divergence, div.inWindow, div.earlyVwapMax > 0, !isLimitUp,
                vwap < div.earlyVwapMax || vwap < prevClose,
-               vwapDistance >= div.top10DistanceThreshold, data.minutesSinceVolHigh > 0,
+               vwapDistance > 0, vwapDistance >= div.top10DistanceThreshold, data.minutesSinceVolHigh > 0,
                (div.yesterdayMaxVol > 0 && div.todayMaxMinuteVol < div.yesterdayMaxVol)
                || (div.yesterdayCumVolToNow > 0 && Double(div.currentCumVol) / Double(div.yesterdayCumVolToNow) <= 1.3) {
                 pattern = "量价背离卖点"
