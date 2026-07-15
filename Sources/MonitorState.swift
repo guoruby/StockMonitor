@@ -259,18 +259,17 @@ class MonitorState: ObservableObject {
                                     let v = m.cumAmt / (Double(m.cumVol) * 100.0)
                                     if v > earlyVMax { earlyVMax = v }
                                 }
-                                // 收集每根分钟线的价格偏离VWAP百分比（只收集正偏离：价格高于均线）
-                                if m.cumVol > 0 {
-                                    let mVwap = m.cumAmt / (Double(m.cumVol) * 100.0)
-                                    if mVwap > 0 {
-                                        let dist = (m.price - mVwap) / mVwap * 100
-                                        if dist > 0 { priceDistances.append(dist) }
+                                // 收集每根分钟线的价格偏离VWAP百分比（含正负偏离，作为前5%的基数）
+                                    if m.cumVol > 0 {
+                                        let mVwap = m.cumAmt / (Double(m.cumVol) * 100.0)
+                                        if mVwap > 0 {
+                                            priceDistances.append((m.price - mVwap) / mVwap * 100)
+                                        }
                                     }
-                                }
                             }
                         }
-                        // 前5%阈值：正偏离按从大到小排序，取第(max(1, N*5%))大的值
-                        // 当前偏离>=此值说明排进正偏离的前5%，属于日内显著偏离
+                        // 前5%阈值：所有分钟线偏离(含负)按从大到小排序，取第(max(1, N*5%))大的值
+                        // 当前偏离>=此值说明排进所有K线的前5%，属于日内显著偏离
                         priceDistances.sort(by: >)
                         let n = priceDistances.count
                         let top5pctIdx = max(1, Int(Double(n) * 0.05)) - 1
