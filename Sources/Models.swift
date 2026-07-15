@@ -81,7 +81,7 @@ struct DivergenceData {
     let earlyVwapMax: Double        // 早盘10分钟(9:30-9:39)内VWAP最大值
     let todayMaxMinuteVol: Int      // 今日最大分钟成交量
     let currentCumVol: Int          // 今日截至当前累计成交量
-    let top10DistanceThreshold: Double // 今日所有分钟线价格偏离VWAP的第10大值(%)，当前偏离>=此值即为Top10
+    let top5pctThreshold: Double // 今日正偏离(价格>均线)中前5%的阈值(%)，当前偏离>=此值即排前5%
 }
 
 struct TrendIndicators {

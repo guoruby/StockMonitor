@@ -269,11 +269,14 @@ class MonitorState: ObservableObject {
                                 }
                             }
                         }
-                        // Top10阈值：降序后取第10大，不足10根取最小值，无数据设无穷大(不触发)
+                        // 前5%阈值：正偏离按从大到小排序，取第(max(1, N*5%))大的值
+                        // 当前偏离>=此值说明排进正偏离的前5%，属于日内显著偏离
                         priceDistances.sort(by: >)
-                        let top10Threshold = priceDistances.count >= 10
-                            ? priceDistances[9]
-                            : (priceDistances.last ?? Double.infinity)
+                        let n = priceDistances.count
+                        let top5pctIdx = max(1, Int(Double(n) * 0.05)) - 1
+                        let top5pctThreshold = n > 0
+                            ? priceDistances[top5pctIdx]
+                            : Double.infinity
                         var yMaxVol = 0
                         var yCumToNow = 0
                         for m in yData {
@@ -287,7 +290,7 @@ class MonitorState: ObservableObject {
                             earlyVwapMax: earlyVMax,
                             todayMaxMinuteVol: todayMaxVol,
                             currentCumVol: curCumVol,
-                            top10DistanceThreshold: top10Threshold
+                            top5pctThreshold: top5pctThreshold
                         )
                     }
 

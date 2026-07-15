@@ -260,11 +260,11 @@ class VWAPAnalyzer {
             let isSurging = (slopeDir == "up" && accPositive && volRatioRecent >= 0.6 && volPeakRatio >= 0.7) && !isLimitUp
 
             // 0. 量价背离卖点（10:14-10:46窗口，最高优先级）
-            // 均线为负(VWAP弱于早盘 或 零轴下方) + 量为负(今日量能弱于昨日) + 价格偏离均线Top10但量非新高
+            // 均线为负(VWAP弱于早盘 或 零轴下方) + 量为负(今日量能弱于昨日) + 价格偏离均线进入正偏离前5%但量非新高
             // 均线为正说明是缩量上涨，交给后续卖点C/F处理
             if let div = data.divergence, div.inWindow, div.earlyVwapMax > 0, !isLimitUp,
                vwap < div.earlyVwapMax || vwap < prevClose,
-               vwapDistance > 0, vwapDistance >= div.top10DistanceThreshold, data.minutesSinceVolHigh > 0,
+               vwapDistance > 0, vwapDistance >= div.top5pctThreshold, data.minutesSinceVolHigh > 0,
                (div.yesterdayMaxVol > 0 && div.todayMaxMinuteVol < div.yesterdayMaxVol)
                || (div.yesterdayCumVolToNow > 0 && Double(div.currentCumVol) / Double(div.yesterdayCumVolToNow) <= 1.3) {
                 pattern = "量价背离卖点"
@@ -275,7 +275,7 @@ class VWAPAnalyzer {
                 let volNeg2 = div.yesterdayCumVolToNow > 0 && Double(div.currentCumVol) / Double(div.yesterdayCumVolToNow) <= 1.3
                 let bothCond = volNeg1 && volNeg2 ? "双重缩量确认" : "缩量"
                 let maStatus = vwap < div.earlyVwapMax ? "均线下行" : "零轴下方"
-                reason = "量价背离卖点+\(bothCond)+价偏离均线Top10(\(String(format: "%.2f", vwapDistance))%)但量非新高+均线为负(\(maStatus))，日内最佳卖点"
+                reason = "量价背离卖点+\(bothCond)+价偏离均线前5%(\(String(format: "%.2f", vwapDistance))%)但量非新高+均线为负(\(maStatus))，日内最佳卖点"
                 if buySignal { buySignal = false }
             }
             // 1. 横盘缩量出货（优先级最高）
