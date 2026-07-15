@@ -254,9 +254,9 @@ class APIService {
         }.resume()
     }
 
-    // MARK: - 昨日分时数据（5日分时接口）
+    // MARK: - 5日分时数据（含今天和昨天，替代被WAF拦截的当日分时接口）
 
-    func fetchYesterdayMinuteData(stockCode: String, completion: @escaping ([MinuteData]?) -> Void) {
+    func fetch5DayMinuteData(stockCode: String, completion: @escaping ((today: [MinuteData], yesterday: [MinuteData])?) -> Void) {
         let tencentCode: String
         if stockCode.hasPrefix("6") {
             tencentCode = "sh\(stockCode)"
@@ -289,19 +289,13 @@ class APIService {
                   let dataDict = json["data"] as? [String: Any],
                   let stockDict = dataDict[tencentCode] as? [String: Any],
                   let dayDataArray = stockDict["data"] as? [[String: Any]] else {
-                Logger.shared.error("昨日分时JSON解析失败: \(stockCode)")
+                Logger.shared.error("5日分时JSON解析失败: \(stockCode)")
                 completion(nil)
                 return
             }
 
-            // dayDataArray[0]=今天, [1]=昨天
             guard dayDataArray.count >= 2 else {
-                Logger.shared.info("昨日分时数据不足: \(stockCode) 仅\(dayDataArray.count)天")
-                completion(nil)
-                return
-            }
-
-            guard let minuteStrings = dayDataArray[1]["data"] as? [String] else {
+                Logger.shared.info("5日分时数据不足: \(stockCode) 仅\(dayDataArray.count)天")
                 completion(nil)
                 return
             }
@@ -312,25 +306,33 @@ class APIService {
                 return
             }
 
-            var result: [MinuteData] = []
-            var prevCumVol = 0
-
-            for str in minuteStrings {
-                let matches = regex.matches(in: str, range: NSRange(str.startIndex..., in: str))
-                for match in matches {
-                    guard match.numberOfRanges == 5 else { continue }
-                    let timeStr = String(str[Range(match.range(at: 1), in: str)!])
-                    let price = Double(String(str[Range(match.range(at: 2), in: str)!])) ?? 0
-                    let cumVol = Int(String(str[Range(match.range(at: 3), in: str)!])) ?? 0
-                    let cumAmt = Double(String(str[Range(match.range(at: 4), in: str)!])) ?? 0
-                    let minuteVol = cumVol - prevCumVol
-                    prevCumVol = cumVol
-                    result.append(MinuteData(time: timeStr, price: price, cumVol: cumVol, cumAmt: cumAmt, minuteVol: minuteVol))
+            // 解析指定天的分时数据
+            func parseDay(_ dayIdx: Int) -> [MinuteData] {
+                guard let minuteStrings = dayDataArray[dayIdx]["data"] as? [String] else { return [] }
+                var result: [MinuteData] = []
+                var prevCumVol = 0
+                for str in minuteStrings {
+                    let matches = regex.matches(in: str, range: NSRange(str.startIndex..., in: str))
+                    for match in matches {
+                        guard match.numberOfRanges == 5 else { continue }
+                        let timeStr = String(str[Range(match.range(at: 1), in: str)!])
+                        let price = Double(String(str[Range(match.range(at: 2), in: str)!])) ?? 0
+                        let cumVol = Int(String(str[Range(match.range(at: 3), in: str)!])) ?? 0
+                        let cumAmt = Double(String(str[Range(match.range(at: 4), in: str)!])) ?? 0
+                        let minuteVol = cumVol - prevCumVol
+                        prevCumVol = cumVol
+                        result.append(MinuteData(time: timeStr, price: price, cumVol: cumVol, cumAmt: cumAmt, minuteVol: minuteVol))
+                    }
                 }
+                return result
             }
 
-            Logger.shared.info("昨日分时数据: \(stockCode) 共\(result.count)条")
-            completion(result.count > 0 ? result : nil)
+            // dayDataArray[0]=今天, [1]=昨天
+            let today = parseDay(0)
+            let yesterday = parseDay(1)
+
+            Logger.shared.info("5日分时数据: \(stockCode) 今天\(today.count)条 昨天\(yesterday.count)条")
+            completion(today.count > 0 ? (today, yesterday) : nil)
         }.resume()
     }
 
