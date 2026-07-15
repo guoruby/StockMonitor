@@ -280,14 +280,12 @@ class MonitorState: ObservableObject {
                                 }
                             }
                         }
-                        // 前5%阈值：所有分钟线偏离(含负)按从大到小排序，取第(max(1, N*5%))大的值
-                        // 当前偏离>=此值说明排进所有K线的前5%，属于日内显著偏离
+                        // Top10阈值：所有分钟线偏离(含负)按从大到小排序，取第10大值
+                        // 当前偏离>=此值说明排进所有K线的前10，属于日内显著偏离
                         priceDistances.sort(by: >)
-                        let n = priceDistances.count
-                        let top5pctIdx = max(1, Int(Double(n) * 0.05)) - 1
-                        let top5pctThreshold = n > 0
-                            ? priceDistances[top5pctIdx]
-                            : Double.infinity
+                        let top10Threshold = priceDistances.count >= 10
+                            ? priceDistances[9]
+                            : (priceDistances.last ?? Double.infinity)
                         var yMaxVol = 0
                         var yCumToNow = 0
                         for m in yData {
@@ -301,7 +299,7 @@ class MonitorState: ObservableObject {
                             earlyVwapMax: earlyVMax,
                             todayMaxMinuteVol: todayMaxVol,
                             currentCumVol: curCumVol,
-                            top5pctThreshold: top5pctThreshold
+                            top10Threshold: top10Threshold
                         )
                     }
 
