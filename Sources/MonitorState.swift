@@ -251,6 +251,7 @@ class MonitorState: ObservableObject {
                             var todayMaxVol = 0
                             var curCumVol = 0
                             var earlyVMax = 0.0
+                            var priceDistances: [Double] = []
                             if let mData = minuteData {
                                 for m in mData {
                                     if m.minuteVol > todayMaxVol { todayMaxVol = m.minuteVol }
@@ -259,8 +260,20 @@ class MonitorState: ObservableObject {
                                         let v = m.cumAmt / (Double(m.cumVol) * 100.0)
                                         if v > earlyVMax { earlyVMax = v }
                                     }
+                                    // 收集每根分钟线的价格偏离VWAP百分比
+                                    if m.cumVol > 0 {
+                                        let mVwap = m.cumAmt / (Double(m.cumVol) * 100.0)
+                                        if mVwap > 0 {
+                                            priceDistances.append((m.price - mVwap) / mVwap * 100)
+                                        }
+                                    }
                                 }
                             }
+                            // Top10阈值：降序后取第10大，不足10根取最小值，无数据设无穷大(不触发)
+                            priceDistances.sort(by: >)
+                            let top10Threshold = priceDistances.count >= 10
+                                ? priceDistances[9]
+                                : (priceDistances.last ?? Double.infinity)
                             var yMaxVol = 0
                             var yCumToNow = 0
                             for m in yData {
@@ -273,7 +286,8 @@ class MonitorState: ObservableObject {
                                 yesterdayCumVolToNow: yCumToNow,
                                 earlyVwapMax: earlyVMax,
                                 todayMaxMinuteVol: todayMaxVol,
-                                currentCumVol: curCumVol
+                                currentCumVol: curCumVol,
+                                top10DistanceThreshold: top10Threshold
                             )
                         }
 
