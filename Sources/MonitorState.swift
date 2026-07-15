@@ -41,6 +41,7 @@ class MonitorState: ObservableObject {
 
     // 量价背离卖点策略状态
     private var minuteDataCache: [String: (today: [MinuteData], yesterday: [MinuteData])] = [:]
+    private var minuteDataCacheTime: [String: Date] = [:]
     private var minuteFetchingCodes: Set<String> = []
     private var divergenceTriggered: Bool = false
     private var divergenceTriggerTime: Date?
@@ -163,13 +164,23 @@ class MonitorState: ObservableObject {
             lastFetchCode = code
         }
 
-        // 异步获取5日分时数据（含今天和昨天，仅首次，之后从缓存读取）
-        if minuteDataCache[code] == nil && !minuteFetchingCodes.contains(code) {
+        // 异步获取5日分时数据：盘中20秒过期重新请求，盘后直接用缓存
+        let now = Date()
+        let cal = Calendar.current
+        let hh = cal.component(.hour, from: now)
+        let mm = cal.component(.minute, from: now)
+        let hhmm = hh * 100 + mm
+        let inTrading = hhmm >= 930 && hhmm <= 1500
+        let cacheAge = minuteDataCacheTime[code].map { now.timeIntervalSince($0) } ?? Double.infinity
+        let cacheExpired = inTrading && cacheAge >= 20
+        let needFetch = minuteDataCache[code] == nil || cacheExpired
+        if needFetch && !minuteFetchingCodes.contains(code) {
             minuteFetchingCodes.insert(code)
             APIService.shared.fetch5DayMinuteData(stockCode: code) { [weak self] result in
                 guard let self = self else { return }
                 if let result = result {
                     self.minuteDataCache[code] = result
+                    self.minuteDataCacheTime[code] = Date()
                     Logger.shared.info("5日分时数据已缓存: \(code) 今天\(result.today.count)条 昨天\(result.yesterday.count)条")
                 }
                 self.minuteFetchingCodes.remove(code)
@@ -253,19 +264,20 @@ class MonitorState: ObservableObject {
                         var priceDistances: [Double] = []
                         if let mData = minuteData {
                             for m in mData {
+                                if let t = Int(m.time), t > currentHHMM { continue }
                                 if m.minuteVol > todayMaxVol { todayMaxVol = m.minuteVol }
                                 curCumVol = m.cumVol
                                 if let t = Int(m.time), t >= 930 && t <= 939, m.cumVol > 0 {
                                     let v = m.cumAmt / (Double(m.cumVol) * 100.0)
                                     if v > earlyVMax { earlyVMax = v }
                                 }
-                                // 收集每根分钟线的价格偏离VWAP百分比（含正负偏离，作为前5%的基数）
-                                    if m.cumVol > 0 {
-                                        let mVwap = m.cumAmt / (Double(m.cumVol) * 100.0)
-                                        if mVwap > 0 {
-                                            priceDistances.append((m.price - mVwap) / mVwap * 100)
-                                        }
+                                // 收集当前时刻及之前每根分钟线的偏离VWAP百分比（含正负，作为前5%基数）
+                                if m.cumVol > 0 {
+                                    let mVwap = m.cumAmt / (Double(m.cumVol) * 100.0)
+                                    if mVwap > 0 {
+                                        priceDistances.append((m.price - mVwap) / mVwap * 100)
                                     }
+                                }
                             }
                         }
                         // 前5%阈值：所有分钟线偏离(含负)按从大到小排序，取第(max(1, N*5%))大的值
