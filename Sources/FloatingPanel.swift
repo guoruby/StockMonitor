@@ -5,7 +5,7 @@ class FloatingPanel: NSPanel {
     private var contentView_: FloatingContentView!
     private var originalPos: NSPoint = .zero
 
-    static let panelWidth: CGFloat = 118
+    static let panelWidth: CGFloat = 152
     static let panelHeight: CGFloat = 22
 
     func show() {
@@ -98,6 +98,7 @@ class FloatingContentView: NSView {
 
     private var deviationField: NSTextField!
     private var signalField: NSTextField!
+    private var marketField: NSTextField!  // 沪深300大盘环境
     private var toggleBtn: NSButton!
 
     private var monitorState = MonitorState.shared
@@ -137,6 +138,14 @@ class FloatingContentView: NSView {
         signalField.isBezeled = false
         addSubview(signalField)
 
+        marketField = NSTextField(labelWithString: "300--")
+        marketField.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        marketField.textColor = NSColor(calibratedRed: 0.3, green: 0.3, blue: 0.35, alpha: 1)
+        marketField.alignment = .center
+        marketField.drawsBackground = false
+        marketField.isBezeled = false
+        addSubview(marketField)
+
         toggleBtn = NSButton(frame: .zero)
         toggleBtn.isBordered = false
         toggleBtn.wantsLayer = true
@@ -156,6 +165,7 @@ class FloatingContentView: NSView {
 
         deviationField.frame = NSRect(x: 4, y: cy, width: 58, height: 14)
         signalField.frame = NSRect(x: 61, y: cy, width: 40, height: 14)
+        marketField.frame = NSRect(x: 100, y: cy, width: 36, height: 14)
         toggleBtn.frame = NSRect(x: w - 16, y: cy, width: 12, height: 12)
     }
 
@@ -266,6 +276,21 @@ class FloatingContentView: NSView {
                 signalField.stringValue = "→"
                 signalField.textColor = NSColor(calibratedRed: 0.45, green: 0.45, blue: 0.5, alpha: 1)
             }
+        }
+
+        // 沪深300大盘环境
+        if state.marketTrend == "多" {
+            marketField.stringValue = "300多"
+            marketField.textColor = NSColor.red
+        } else if state.marketTrend == "空" {
+            marketField.stringValue = "300空"
+            marketField.textColor = NSColor(calibratedRed: 0, green: 0.55, blue: 0, alpha: 1)
+        } else if state.marketTrend == "平" {
+            marketField.stringValue = "300平"
+            marketField.textColor = NSColor(calibratedRed: 0.45, green: 0.45, blue: 0.5, alpha: 1)
+        } else {
+            marketField.stringValue = "300--"
+            marketField.textColor = NSColor(calibratedRed: 0.4, green: 0.4, blue: 0.4, alpha: 1)
         }
 
         updateToggleIcon()

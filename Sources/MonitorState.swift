@@ -32,6 +32,7 @@ class MonitorState: ObservableObject {
     @Published var trendText: String = "--"
     @Published var buySignal: Bool = false
     @Published var sellSignal: Bool = false
+    @Published var marketTrend: String = "--"  // 沪深300大盘环境：多/空/平
 
     var config: AppConfig = AppConfig.load()
     private var timer: Timer?
@@ -46,6 +47,11 @@ class MonitorState: ObservableObject {
     private var divergenceTriggered: Bool = false
     private var divergenceTriggerTime: Date?
     private var lastFetchCode: String = ""
+
+    // 沪深300大盘环境数据
+    private var hs300Cache: (today: [MinuteData], yesterday: [MinuteData], prec: Double)?
+    private var hs300CacheTime: Date?
+    private var hs300Fetching: Bool = false
 
     func toggleMonitoring() {
         isMonitoring.toggle()
@@ -366,6 +372,50 @@ class MonitorState: ObservableObject {
             case .failure(let error):
                 Logger.shared.error("API调用失败: \(error.localizedDescription)")
             }
+        }
+
+        // 沪深300大盘环境（VWAP零轴+斜率，20秒缓存，盘中刷新）
+        fetchHS300MarketTrend()
+    }
+
+    private func fetchHS300MarketTrend() {
+        let now = Date()
+        let cal = Calendar.current
+        let hh = cal.component(.hour, from: now)
+        let mm = cal.component(.minute, from: now)
+        let hhmm = hh * 100 + mm
+        let inTrading = hhmm >= 930 && hhmm <= 1500
+        let cacheAge = hs300CacheTime.map { now.timeIntervalSince($0) } ?? Double.infinity
+        let needFetch = hs300Cache == nil || (inTrading && cacheAge >= 20)
+
+        if needFetch && !hs300Fetching {
+            hs300Fetching = true
+            APIService.shared.fetch5DayMinuteData(stockCode: "sh000300") { [weak self] result in
+                guard let self = self else { return }
+                self.hs300Fetching = false
+                guard let result = result else { return }
+                let prec = result.yesterday.last?.price ?? 0
+                self.hs300Cache = (result.today, result.yesterday, prec)
+                self.hs300CacheTime = Date()
+                self.updateMarketTrend()
+            }
+        } else if hs300Cache != nil {
+            updateMarketTrend()
+        }
+    }
+
+    private func updateMarketTrend() {
+        guard let cache = hs300Cache, cache.today.count >= 2, cache.prec > 0 else {
+            marketTrend = "--"
+            return
+        }
+        let trend = VWAPAnalyzer.calcTrendFromMinute(cache.today, prevClose: cache.prec)
+        if trend.vwapVsZero > 0.5 && trend.slope > 0 {
+            marketTrend = "多"
+        } else if trend.vwapVsZero < -0.5 && trend.slope < 0 {
+            marketTrend = "空"
+        } else {
+            marketTrend = "平"
         }
     }
 
