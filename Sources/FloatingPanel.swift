@@ -5,7 +5,7 @@ class FloatingPanel: NSPanel {
     private var contentView_: FloatingContentView!
     private var originalPos: NSPoint = .zero
 
-    static let panelWidth: CGFloat = 152
+    static let panelWidth: CGFloat = 172
     static let panelHeight: CGFloat = 22
 
     func show() {
@@ -165,7 +165,7 @@ class FloatingContentView: NSView {
 
         deviationField.frame = NSRect(x: 4, y: cy, width: 58, height: 14)
         signalField.frame = NSRect(x: 61, y: cy, width: 40, height: 14)
-        marketField.frame = NSRect(x: 100, y: cy, width: 36, height: 14)
+        marketField.frame = NSRect(x: 100, y: cy, width: 56, height: 14)
         toggleBtn.frame = NSRect(x: w - 16, y: cy, width: 12, height: 12)
     }
 
@@ -278,20 +278,32 @@ class FloatingContentView: NSView {
             }
         }
 
-        // 沪深300大盘环境
+        // 沪深300大盘环境（多空+压力叠加）
+        var marketText = "300"
+        var marketColor: NSColor = NSColor(calibratedRed: 0.4, green: 0.4, blue: 0.4, alpha: 1)
+
         if state.marketTrend == "多" {
-            marketField.stringValue = "300多"
-            marketField.textColor = NSColor.red
+            marketText = "300多"
+            marketColor = NSColor.red
         } else if state.marketTrend == "空" {
-            marketField.stringValue = "300空"
-            marketField.textColor = NSColor(calibratedRed: 0, green: 0.55, blue: 0, alpha: 1)
+            marketText = "300空"
+            marketColor = NSColor(calibratedRed: 0, green: 0.55, blue: 0, alpha: 1)
         } else if state.marketTrend == "平" {
-            marketField.stringValue = "300平"
-            marketField.textColor = NSColor(calibratedRed: 0.45, green: 0.45, blue: 0.5, alpha: 1)
-        } else {
-            marketField.stringValue = "300--"
-            marketField.textColor = NSColor(calibratedRed: 0.4, green: 0.4, blue: 0.4, alpha: 1)
+            marketText = "300平"
+            marketColor = NSColor(calibratedRed: 0.45, green: 0.45, blue: 0.5, alpha: 1)
         }
+
+        if !state.marketPressure.isEmpty {
+            marketText += "(\(state.marketPressure))"
+            if state.marketPressure == "弱" {
+                marketColor = NSColor(calibratedRed: 0.6, green: 0.3, blue: 0.3, alpha: 1)
+            } else if state.marketPressure == "突破" {
+                marketColor = NSColor(calibratedRed: 0.8, green: 0.4, blue: 0.1, alpha: 1)
+            }
+        }
+
+        marketField.stringValue = marketText
+        marketField.textColor = marketColor
 
         updateToggleIcon()
     }

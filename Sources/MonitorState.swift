@@ -33,6 +33,7 @@ class MonitorState: ObservableObject {
     @Published var buySignal: Bool = false
     @Published var sellSignal: Bool = false
     @Published var marketTrend: String = "--"  // 沪深300大盘环境：多/空/平
+    @Published var marketPressure: String = "" // 沪深300压力状态：承压/突破/弱
 
     var config: AppConfig = AppConfig.load()
     private var timer: Timer?
@@ -49,7 +50,7 @@ class MonitorState: ObservableObject {
     private var lastFetchCode: String = ""
 
     // 沪深300大盘环境数据
-    private var hs300Cache: (today: [MinuteData], yesterday: [MinuteData], prec: Double)?
+    private var hs300Cache: (today: [MinuteData], yesterday: [MinuteData], prec: Double, yVwap: Double, yChangePct: Double)?
     private var hs300CacheTime: Date?
     private var hs300Fetching: Bool = false
 
@@ -393,9 +394,14 @@ class MonitorState: ObservableObject {
             APIService.shared.fetch5DayMinuteData(stockCode: "sh000300") { [weak self] result in
                 guard let self = self else { return }
                 self.hs300Fetching = false
-                guard let result = result else { return }
+                guard let result = result, result.yesterday.count > 0 else { return }
                 let prec = result.yesterday.last?.price ?? 0
-                self.hs300Cache = (result.today, result.yesterday, prec)
+                // 昨日VWAP：昨日全天累计额 / 累计量
+                let yLast = result.yesterday.last!
+                let yVwap = yLast.cumVol > 0 ? yLast.cumAmt / (Double(yLast.cumVol) * 100.0) : prec
+                // 昨日涨跌幅：(昨日收盘 - 前日昨收) / 前日昨收 * 100
+                let yChangePct = prec > 0 ? (yLast.price - prec) / prec * 100 : 0
+                self.hs300Cache = (result.today, result.yesterday, prec, yVwap, yChangePct)
                 self.hs300CacheTime = Date()
                 self.updateMarketTrend()
             }
@@ -407,8 +413,11 @@ class MonitorState: ObservableObject {
     private func updateMarketTrend() {
         guard let cache = hs300Cache, cache.today.count >= 2, cache.prec > 0 else {
             marketTrend = "--"
+            marketPressure = ""
             return
         }
+
+        // 1. 今日多空趋势（VWAP零轴+斜率）
         let trend = VWAPAnalyzer.calcTrendFromMinute(cache.today, prevClose: cache.prec)
         if trend.vwapVsZero > 0.5 && trend.slope > 0 {
             marketTrend = "多"
@@ -416,6 +425,47 @@ class MonitorState: ObservableObject {
             marketTrend = "空"
         } else {
             marketTrend = "平"
+        }
+
+        // 2. 昨日压力判断
+        // 昨日大跌(跌幅>1%) → 今日承压，看开盘5分钟能否突破昨日均价
+        if cache.yChangePct < -1.0 && cache.yVwap > 0 {
+            let cal = Calendar.current
+            let now = Date()
+            let hh = cal.component(.hour, from: now)
+            let mm = cal.component(.minute, from: now)
+            let hhmm = hh * 100 + mm
+
+            // 取今日开盘5分钟(9:30-9:35)的数据
+            let first5Min = cache.today.filter { m in
+                if let t = Int(m.time), t >= 930 && t <= 935 { return true }
+                return false
+            }
+
+            if first5Min.count >= 2 {
+                // 开盘5分钟内最新均价和实时价格都站上昨日均价 → 突破压力
+                let lastIn5 = first5Min.last!
+                let curVwap = lastIn5.cumVol > 0 ? lastIn5.cumAmt / (Double(lastIn5.cumVol) * 100.0) : lastIn5.price
+                if curVwap > cache.yVwap && lastIn5.price > cache.yVwap {
+                    marketPressure = "突破"
+                } else {
+                    marketPressure = "弱"
+                }
+            } else if hhmm > 935 {
+                // 已过9:35但5分钟数据不足，用当前数据判断
+                let last = cache.today.last!
+                let curVwap = last.cumVol > 0 ? last.cumAmt / (Double(last.cumVol) * 100.0) : last.price
+                if curVwap > cache.yVwap && last.price > cache.yVwap {
+                    marketPressure = "突破"
+                } else {
+                    marketPressure = "弱"
+                }
+            } else {
+                // 9:35之前数据不足，暂不判断
+                marketPressure = "承压"
+            }
+        } else {
+            marketPressure = ""
         }
     }
 
