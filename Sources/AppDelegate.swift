@@ -6,6 +6,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
     var statusMenu: NSMenu!
     var settingsWindow: NSWindow?
+    private var priceLevelWindow: NSWindow?
     var memoPanels: [String: MemoPanel] = [:]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -80,6 +81,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let deleteMemoItem = statusMenu.addItem(withTitle: "删除便签", action: nil, keyEquivalent: "")
         deleteMemoItem.submenu = buildDeleteMemoSubmenu()
         statusMenu.addItem(NSMenuItem.separator())
+        statusMenu.addItem(withTitle: "设置压力支撑位...", action: #selector(openPriceLevelSettings), keyEquivalent: "p")
         statusMenu.addItem(withTitle: "设置...", action: #selector(openSettings), keyEquivalent: ",")
         statusMenu.addItem(withTitle: "打开日志文件夹", action: #selector(openLogFolder), keyEquivalent: "")
         statusMenu.addItem(NSMenuItem.separator())
@@ -236,6 +238,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         self.settingsWindow = window
         Logger.shared.info("设置窗口已打开")
+    }
+
+    @objc private func openPriceLevelSettings() {
+        NSApp.activate(ignoringOtherApps: true)
+
+        if let window = priceLevelWindow, window.isVisible {
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let view = PriceLevelSettingsView()
+        let hostingView = NSHostingView(rootView: view)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 420, height: 480)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 480),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "压力支撑位设置"
+        window.contentView = hostingView
+        window.center()
+        window.isReleasedWhenClosed = false
+        window.makeKeyAndOrderFront(nil)
+
+        self.priceLevelWindow = window
+        Logger.shared.info("压力支撑位设置窗口已打开")
     }
 
     @objc private func openLogFolder() {

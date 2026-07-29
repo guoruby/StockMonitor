@@ -34,6 +34,7 @@ class MonitorState: ObservableObject {
     @Published var sellSignal: Bool = false
     @Published var marketTrend: String = "--"  // 沪深300大盘环境：多/空/平
     @Published var marketPressure: String = "" // 沪深300压力状态：承压/突破/弱
+    @Published var priceLevelStatus: String = ""  // 压力支撑位状态：突破压力/跌破支撑/""
 
     var config: AppConfig = AppConfig.load()
     private var timer: Timer?
@@ -367,6 +368,9 @@ class MonitorState: ObservableObject {
                     default: self.trendText = "→ 震荡"
                     }
 
+                    // 压力支撑位检查（作为买卖信号的一个维度叠加）
+                    self.checkPriceLevels(data: data)
+
                     Logger.shared.info("信号: \(analysis.signal) 形态=\(analysis.pattern) 置信=\(analysis.confidence) 原因=\(analysis.reason)")
                 }
 
@@ -377,6 +381,60 @@ class MonitorState: ObservableObject {
 
         // 沪深300大盘环境（VWAP零轴+斜率，20秒缓存，盘中刷新）
         fetchHS300MarketTrend()
+    }
+
+    // 压力支撑位检查（多维度叠加：个股+沪深300）
+    private func checkPriceLevels(data: StockData) {
+        priceLevelStatus = ""
+        let price = data.price
+
+        // 1. 检查个股压力支撑位
+        if let stockLevel = PriceLevelStore.shared.getStockLevel(code: data.code) {
+            if price > stockLevel.pressure {
+                // 突破压力位 → 买入信号维度
+                if !sellSignal {
+                    buySignal = true
+                    priceLevelStatus = "突破压力\(String(format: "%.2f", stockLevel.pressure))"
+                    if signal == "neutral" {
+                        signal = "strong"
+                        recommendation = "buy"
+                    }
+                    Logger.shared.info("突破个股压力位: \(stockLevel.pressure)，当前价: \(price)")
+                }
+            } else if price < stockLevel.support {
+                // 跌破支撑位 → 卖出信号维度
+                sellSignal = true
+                priceLevelStatus = "跌破支撑\(String(format: "%.2f", stockLevel.support))"
+                if signal != "limit_up" {
+                    signal = "sell"
+                    recommendation = "sell"
+                    buySignal = false
+                }
+                Logger.shared.info("跌破个股支撑位: \(stockLevel.support)，当前价: \(price)")
+            }
+        }
+
+        // 2. 检查沪深300压力支撑位（大盘环境辅助）
+        if let hs300Level = PriceLevelStore.shared.hs300Level, !hs300Level.isExpired() {
+            if let hs300Data = hs300Cache {
+                let hs300Price = hs300Data.today.last?.price ?? 0
+                if hs300Price > 0 && hs300Price > hs300Level.pressure && priceLevelStatus.isEmpty {
+                    priceLevelStatus = "大盘突破压力\(String(format: "%.0f", hs300Level.pressure))"
+                    Logger.shared.info("沪深300突破压力位: \(hs300Level.pressure)，当前: \(hs300Price)")
+                } else if hs300Price > 0 && hs300Price < hs300Level.support {
+                    if !sellSignal {
+                        sellSignal = true
+                        priceLevelStatus = "大盘跌破支撑\(String(format: "%.0f", hs300Level.support))"
+                        if signal != "limit_up" {
+                            signal = "sell"
+                            recommendation = "sell"
+                            buySignal = false
+                        }
+                        Logger.shared.info("沪深300跌破支撑位: \(hs300Level.support)，当前: \(hs300Price)")
+                    }
+                }
+            }
+        }
     }
 
     private func fetchHS300MarketTrend() {

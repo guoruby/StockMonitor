@@ -141,3 +141,117 @@ struct MemoItem: Codable {
     var height: Double
     var createdAt: String
 }
+
+// 压力支撑位设置
+struct PriceLevel: Codable {
+    var support: Double      // 支撑位价格
+    var pressure: Double     // 压力位价格
+    var validDate: String    // 生效日期 YYYYMMDD
+    var createdAt: String    // 创建时间
+
+    func isExpired() -> Bool {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd"
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        guard let valid = formatter.date(from: validDate) else { return true }
+        // 有效期到生效日期当天收盘(15:00)
+        let expiry = valid.addingTimeInterval(15 * 3600)
+        return Date() > expiry
+    }
+}
+
+// 压力支撑位存储（持久化到文件）
+class PriceLevelStore: ObservableObject {
+    static let shared = PriceLevelStore()
+
+    @Published var hs300Level: PriceLevel?
+    @Published var stockLevels: [String: PriceLevel] = [:]  // key: stockCode
+
+    private var fileURL: URL {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("StockMonitor", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("price_levels.json")
+    }
+
+    init() {
+        load()
+    }
+
+    private struct StoreData: Codable {
+        var hs300Level: PriceLevel?
+        var stockLevels: [String: PriceLevel]
+    }
+
+    func load() {
+        guard let data = try? Data(contentsOf: fileURL),
+              let store = try? JSONDecoder().decode(StoreData.self, from: data) else { return }
+        // 过滤过期数据
+        hs300Level = store.hs300Level?.isExpired() == false ? store.hs300Level : nil
+        for (k, v) in store.stockLevels {
+            if !v.isExpired() { stockLevels[k] = v }
+        }
+    }
+
+    func save() {
+        let store = StoreData(hs300Level: hs300Level, stockLevels: stockLevels)
+        if let data = try? JSONEncoder().encode(store) {
+            try? data.write(to: fileURL)
+        }
+    }
+
+    // 设置沪深300压力支撑位
+    // - 收盘后(>15:00)设置 → 下一交易日生效
+    // - 盘前/盘中设置 → 当天生效
+    func setHS300Level(support: Double, pressure: Double) {
+        let validDate = Self.calcValidDate()
+        hs300Level = PriceLevel(support: support, pressure: pressure, validDate: validDate,
+                                createdAt: ISO8601DateFormatter().string(from: Date()))
+        save()
+    }
+
+    // 设置个股压力支撑位
+    func setStockLevel(code: String, support: Double, pressure: Double) {
+        let validDate = Self.calcValidDate()
+        stockLevels[code] = PriceLevel(support: support, pressure: pressure, validDate: validDate,
+                                       createdAt: ISO8601DateFormatter().string(from: Date()))
+        save()
+    }
+
+    // 获取个股当前有效的压力支撑位（含沪深300作为大盘参考）
+    func getStockLevel(code: String) -> PriceLevel? {
+        if let level = stockLevels[code], !level.isExpired() {
+            return level
+        }
+        return nil
+    }
+
+    // 计算生效日期：收盘后设置 → 下一交易日，盘前/盘中设置 → 当天
+    private static func calcValidDate() -> String {
+        let cal = Calendar(identifier: .gregorian)
+        let now = Date()
+        var shanghaiCal = cal
+        shanghaiCal.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let hh = shanghaiCal.component(.hour, from: now)
+        let mm = shanghaiCal.component(.minute, from: now)
+        let hhmm = hh * 100 + mm
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd"
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+
+        // 收盘后(>15:00) → 下一交易日
+        if hhmm > 1500 {
+            // 找下一个工作日（跳过周末）
+            for i in 1...7 {
+                if let nextDay = shanghaiCal.date(byAdding: .day, value: i, to: now) {
+                    let weekday = shanghaiCal.component(.weekday, from: nextDay)
+                    if weekday != 1 && weekday != 7 {  // 1=周日, 7=周六
+                        return formatter.string(from: nextDay)
+                    }
+                }
+            }
+        }
+        return formatter.string(from: now)
+    }
+}

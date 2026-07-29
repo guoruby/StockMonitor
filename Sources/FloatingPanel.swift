@@ -305,6 +305,9 @@ class FloatingContentView: NSView {
         marketField.stringValue = marketText
         marketField.textColor = marketColor
 
+        // 压力支撑位触发状态（tooltip 显示详情）
+        self.toolTip = state.priceLevelStatus.isEmpty ? nil : state.priceLevelStatus
+
         updateToggleIcon()
     }
 
