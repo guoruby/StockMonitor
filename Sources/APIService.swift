@@ -1,5 +1,13 @@
 import Foundation
 import CoreFoundation
+import CommonCrypto
+
+// MARK: - 板块强度数据
+struct SectorStrength {
+    let name: String   // 板块名
+    let strength: Int  // 强度值
+    let limitUp: Int   // 涨停数
+}
 
 class APIService {
     static let shared = APIService()
@@ -334,6 +342,137 @@ class APIService {
             Logger.shared.info("5日分时数据: \(stockCode) 今天\(today.count)条 昨天\(yesterday.count)条")
             completion(today.count > 0 ? (today, yesterday) : nil)
         }.resume()
+    }
+
+    // MARK: - 板块强度（短线侠，AES-256-CBC解密）
+
+    /// 短线侠板块强度接口（板强+主力流入两个tab）
+    private enum SectorStrengthType {
+        case strength   // 板块强度 val=强度值
+        case moneyIn    // 主力流入 val=流入万元
+    }
+
+    // 短线侠AES-256-CBC密钥（从crypto.js逆向）
+    private static let sectorKeyHex = "7365637265746b65793332327965732121616161616161616161616161616161"  // secretkey32yes!!aaaa...
+    private static let sectorIVHex  = "666978656469765f313676616c756564"                                  // fixediv_16valued
+
+    func fetchSectorStrength(completion: @escaping ([SectorStrength]?) -> Void) {
+        fetchSectorStrengthImpl(type: .strength, completion: completion)
+    }
+
+    func fetchSectorMoneyIn(completion: @escaping ([SectorStrength]?) -> Void) {
+        fetchSectorStrengthImpl(type: .moneyIn, completion: completion)
+    }
+
+    private func fetchSectorStrengthImpl(type: SectorStrengthType, completion: @escaping ([SectorStrength]?) -> Void) {
+        let fileName = type == .strength ? "platechart1.json" : "platechart2.json"
+        let urlStr = "https://www.duanxianxia.com/vendor/stockdata/\(fileName)"
+        guard let url = URL(string: urlStr) else {
+            Logger.shared.error("板块强度: URL无效")
+            completion(nil)
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.setValue("https://www.duanxianxia.com/", forHTTPHeaderField: "Referer")
+        request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
+
+        Logger.shared.info("板块强度请求: \(urlStr)")
+
+        session.dataTask(with: request) { [weak self] data, _, error in
+            guard let self = self else { return }
+            if let error = error {
+                Logger.shared.error("板块强度网络错误: \(error.localizedDescription)")
+                completion(nil)
+                return
+            }
+            guard let data = data, let cipherText = String(data: data, encoding: .utf8) else {
+                Logger.shared.error("板块强度: 无响应数据")
+                completion(nil)
+                return
+            }
+
+            guard let plainText = self.decryptAES256CBC(base64Cipher: cipherText) else {
+                Logger.shared.error("板块强度: 解密失败, 密文前50=\(String(cipherText.prefix(50)))")
+                completion(nil)
+                return
+            }
+
+            guard let jsonData = plainText.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                  let plates = json["plates"] as? [String: Any] else {
+                Logger.shared.error("板块强度: JSON解析失败")
+                completion(nil)
+                return
+            }
+
+            var result: [SectorStrength] = []
+            for (_, val) in plates {
+                guard let dict = val as? [String: Any],
+                      let name = dict["name"] as? String,
+                      let strengthStr = dict["val"] as? String,
+                      let limitUpStr = dict["ztcount"] as? String else { continue }
+                let strength = Int(strengthStr) ?? 0
+                let limitUp = Int(limitUpStr) ?? 0
+                result.append(SectorStrength(name: name, strength: strength, limitUp: limitUp))
+            }
+
+            // 按强度/主力流入降序
+            result.sort { $0.strength > $1.strength }
+
+            Logger.shared.info("板块强度解析成功: 共\(result.count)条, Top3=\(result.prefix(3).map { "\($0.name)(\($0.strength))/\($0.limitUp)涨停" }.joined(separator: ", "))")
+            completion(result)
+        }.resume()
+    }
+
+    /// AES-256-CBC + PKCS7 + Base64 解密
+    private func decryptAES256CBC(base64Cipher: String) -> String? {
+        guard let keyData = Self.hexToData(Self.sectorKeyHex),
+              let ivData = Self.hexToData(Self.sectorIVHex),
+              let cipherData = Data(base64Encoded: base64Cipher) else {
+            return nil
+        }
+
+        let bufferSize = cipherData.count + kCCBlockSizeAES128
+        var outBytes = [UInt8](repeating: 0, count: bufferSize)
+        var numBytesDecrypted = 0
+
+        let status = cipherData.withUnsafeBytes { cipherBytes -> CCCryptorStatus in
+            keyData.withUnsafeBytes { keyBytes in
+                ivData.withUnsafeBytes { ivBytes in
+                    CCCrypt(
+                        CCOperation(kCCDecrypt),
+                        CCAlgorithm(kCCAlgorithmAES),
+                        CCOptions(kCCOptionPKCS7Padding),
+                        keyBytes.baseAddress, keyData.count,
+                        ivBytes.baseAddress,
+                        cipherBytes.baseAddress, cipherData.count,
+                        &outBytes, bufferSize,
+                        &numBytesDecrypted
+                    )
+                }
+            }
+        }
+
+        guard status == kCCSuccess else {
+            Logger.shared.error("板块强度解密: CCCrypt失败 status=\(status)")
+            return nil
+        }
+
+        let decrypted = Data(bytes: outBytes, count: numBytesDecrypted)
+        return String(data: decrypted, encoding: .utf8)
+    }
+
+    private static func hexToData(_ hex: String) -> Data? {
+        var data = Data(capacity: hex.count / 2)
+        var index = hex.startIndex
+        while index < hex.endIndex {
+            let next = hex.index(index, offsetBy: 2, limitedBy: hex.endIndex) ?? hex.endIndex
+            guard let byte = UInt8(hex[index..<next], radix: 16) else { return nil }
+            data.append(byte)
+            index = next
+        }
+        return data
     }
 
     // MARK: - 涨跌幅限制比例

@@ -5,8 +5,8 @@ class FloatingPanel: NSPanel {
     private var contentView_: FloatingContentView!
     private var originalPos: NSPoint = .zero
 
-    static let panelWidth: CGFloat = 172
-    static let panelHeight: CGFloat = 22
+    static let panelWidth: CGFloat = 200
+    static let panelHeight: CGFloat = 38
 
     func show() {
         styleMask = [.titled, .closable, .miniaturizable]
@@ -31,7 +31,7 @@ class FloatingPanel: NSPanel {
         let region = config.ocrRegion
         let screenFrame = NSScreen.main!.frame
         let posX = Double(region.left + region.width)
-        let ocrTopY = screenFrame.height - Double(region.top) + 380.0
+        let ocrTopY = screenFrame.height - Double(region.top) + 380.0 - 16  // 面板加高，保持底部位置不变
         let desiredContentRect = NSRect(x: posX, y: ocrTopY, width: Double(w), height: Double(h))
         let frameRect = self.frameRect(forContentRect: desiredContentRect)
         setFrame(frameRect, display: true)
@@ -100,6 +100,7 @@ class FloatingContentView: NSView {
     private var signalField: NSTextField!
     private var marketField: NSTextField!  // 沪深300大盘环境
     private var toggleBtn: NSButton!
+    private var sectorFields: [NSTextField] = []  // 短线侠板块强度前三名
 
     private var monitorState = MonitorState.shared
     private var timer: Timer?
@@ -155,18 +156,38 @@ class FloatingContentView: NSView {
         toggleBtn.action = #selector(toggleMonitoring)
         addSubview(toggleBtn)
 
+        // 板块强度前三名
+        sectorFields = (0..<3).map { _ in
+            let f = NSTextField(labelWithString: "")
+            f.font = NSFont.systemFont(ofSize: 10, weight: .semibold)
+            f.textColor = NSColor(calibratedRed: 0.4, green: 0.4, blue: 0.4, alpha: 1)
+            f.alignment = .center
+            f.drawsBackground = false
+            f.isBezeled = false
+            addSubview(f)
+            return f
+        }
+
         layoutAll()
     }
 
     private func layoutAll() {
         let w = bounds.width
         let h = bounds.height
-        let cy: CGFloat = (h - 12) / 2
+        let cyTop: CGFloat = h - 16           // 顶行 y 位置
+        let cyBottom: CGFloat = 2             // 底行 y 位置
 
-        deviationField.frame = NSRect(x: 4, y: cy, width: 58, height: 14)
-        signalField.frame = NSRect(x: 61, y: cy, width: 40, height: 14)
-        marketField.frame = NSRect(x: 100, y: cy, width: 56, height: 14)
-        toggleBtn.frame = NSRect(x: w - 16, y: cy, width: 12, height: 12)
+        // 顶行：偏离度 | 信号 | 沪深300 | toggle
+        deviationField.frame = NSRect(x: 4, y: cyTop, width: 58, height: 14)
+        signalField.frame = NSRect(x: 61, y: cyTop, width: 40, height: 14)
+        marketField.frame = NSRect(x: 100, y: cyTop, width: 86, height: 14)
+        toggleBtn.frame = NSRect(x: w - 16, y: cyTop, width: 12, height: 12)
+
+        // 底行：3个板块（前3名）
+        let sectorWidth: CGFloat = (w - 8) / 3
+        for (i, field) in sectorFields.enumerated() {
+            field.frame = NSRect(x: 4 + CGFloat(i) * sectorWidth, y: cyBottom, width: sectorWidth, height: 12)
+        }
     }
 
     override func layout() {
@@ -304,6 +325,25 @@ class FloatingContentView: NSView {
 
         marketField.stringValue = marketText
         marketField.textColor = marketColor
+
+        // 短线侠板块强度前三名（板块名+涨停数）
+        let sectors = state.sectorTop3
+        for (i, field) in sectorFields.enumerated() {
+            if i < sectors.count {
+                let s = sectors[i]
+                field.stringValue = "\(s.name)\(s.limitUp)板"
+                // 涨停数>=3 红色强调，否则灰色
+                if s.limitUp >= 3 {
+                    field.textColor = NSColor(calibratedRed: 0.85, green: 0.15, blue: 0.15, alpha: 1)
+                } else if s.limitUp >= 1 {
+                    field.textColor = NSColor(calibratedRed: 0.5, green: 0.2, blue: 0.2, alpha: 1)
+                } else {
+                    field.textColor = NSColor(calibratedRed: 0.4, green: 0.4, blue: 0.4, alpha: 1)
+                }
+            } else {
+                field.stringValue = ""
+            }
+        }
 
         // 压力支撑位触发状态（tooltip 显示详情）
         self.toolTip = state.priceLevelStatus.isEmpty ? nil : state.priceLevelStatus

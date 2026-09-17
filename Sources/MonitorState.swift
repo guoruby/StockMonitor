@@ -35,6 +35,7 @@ class MonitorState: ObservableObject {
     @Published var marketTrend: String = "--"  // 沪深300大盘环境：多/空/平
     @Published var marketPressure: String = "" // 沪深300压力状态：承压/突破/弱
     @Published var priceLevelStatus: String = ""  // 压力支撑位状态：突破压力/跌破支撑/""
+    @Published var sectorTop3: [SectorStrength] = []  // 短线侠板块强度前三名
 
     var config: AppConfig = AppConfig.load()
     private var timer: Timer?
@@ -55,6 +56,11 @@ class MonitorState: ObservableObject {
     private var hs300CacheTime: Date?
     private var hs300Fetching: Bool = false
 
+    // 短线侠板块强度
+    private var sectorTimer: Timer?
+    private var sectorCacheTime: Date?
+    private var sectorFetching: Bool = false
+
     func toggleMonitoring() {
         isMonitoring.toggle()
         NotificationCenter.default.post(name: .monitoringStateChanged, object: nil)
@@ -71,14 +77,53 @@ class MonitorState: ObservableObject {
             self?.updateData()
         }
         updateData()
+
+        // 板块强度：盘中15秒刷新，盘后1分钟刷新
+        let now = Date()
+        let cal = Calendar.current
+        let hhmm = cal.component(.hour, from: now) * 100 + cal.component(.minute, from: now)
+        let inTrading = hhmm >= 930 && hhmm <= 1500
+        let sectorInterval: TimeInterval = inTrading ? 15 : 60
+        sectorTimer = Timer.scheduledTimer(withTimeInterval: sectorInterval, repeats: true) { [weak self] _ in
+            self?.fetchSectorStrength()
+        }
+        fetchSectorStrength()
     }
 
     func stopMonitoring() {
         timer?.invalidate()
         timer = nil
+        sectorTimer?.invalidate()
+        sectorTimer = nil
         stopShaking()
         statusMessage = "已停止"
         Logger.shared.info("停止监控")
+    }
+
+    private func fetchSectorStrength() {
+        let now = Date()
+        let cal = Calendar.current
+        let hhmm = cal.component(.hour, from: now) * 100 + cal.component(.minute, from: now)
+        let inTrading = hhmm >= 930 && hhmm <= 1500
+        let cacheAge = sectorCacheTime.map { now.timeIntervalSince($0) } ?? Double.infinity
+        let minInterval: TimeInterval = inTrading ? 15 : 60
+        guard sectorCacheTime == nil || cacheAge >= minInterval else { return }
+        guard !sectorFetching else { return }
+        sectorFetching = true
+
+        APIService.shared.fetchSectorStrength { [weak self] sectors in
+            guard let self = self else { return }
+            self.sectorFetching = false
+            guard let sectors = sectors, !sectors.isEmpty else {
+                Logger.shared.error("板块强度: 拉取失败或为空")
+                return
+            }
+            self.sectorCacheTime = Date()
+            let top3 = Array(sectors.prefix(3))
+            DispatchQueue.main.async {
+                self.sectorTop3 = top3
+            }
+        }
     }
 
     private func updateData() {
