@@ -35,7 +35,8 @@ class MonitorState: ObservableObject {
     @Published var marketTrend: String = "--"  // 沪深300大盘环境：多/空/平
     @Published var marketPressure: String = "" // 沪深300压力状态：承压/突破/弱
     @Published var priceLevelStatus: String = ""  // 压力支撑位状态：突破压力/跌破支撑/""
-    @Published var sectorTop3: [SectorStrength] = []  // 短线侠板块强度前三名
+    @Published var sectorTop3: [SectorStrength] = []  // 短线侠板块强度前三名（最强）
+    @Published var sectorBottom3: [SectorStrength] = []  // 短线侠板块强度后三名（最弱）
 
     var config: AppConfig = AppConfig.load()
     private var timer: Timer?
@@ -120,8 +121,10 @@ class MonitorState: ObservableObject {
             }
             self.sectorCacheTime = Date()
             let top3 = Array(sectors.prefix(3))
+            let bottom3 = Array(sectors.suffix(3).reversed())  // API返回已按强度降序，取末尾3个
             DispatchQueue.main.async {
                 self.sectorTop3 = top3
+                self.sectorBottom3 = bottom3
             }
         }
     }

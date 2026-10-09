@@ -6,7 +6,7 @@ class FloatingPanel: NSPanel {
     private var originalPos: NSPoint = .zero
 
     static let panelWidth: CGFloat = 200
-    static let panelHeight: CGFloat = 38
+    static let panelHeight: CGFloat = 54
 
     func show() {
         styleMask = [.titled, .closable, .miniaturizable]
@@ -31,7 +31,7 @@ class FloatingPanel: NSPanel {
         let region = config.ocrRegion
         let screenFrame = NSScreen.main!.frame
         let posX = Double(region.left + region.width)
-        let ocrTopY = screenFrame.height - Double(region.top) + 380.0 - 16  // 面板加高，保持底部位置不变
+        let ocrTopY = screenFrame.height - Double(region.top) + 380.0 - 32  // 面板加高至三行，保持底部位置不变
         let desiredContentRect = NSRect(x: posX, y: ocrTopY, width: Double(w), height: Double(h))
         let frameRect = self.frameRect(forContentRect: desiredContentRect)
         setFrame(frameRect, display: true)
@@ -100,7 +100,8 @@ class FloatingContentView: NSView {
     private var signalField: NSTextField!
     private var marketField: NSTextField!  // 沪深300大盘环境
     private var toggleBtn: NSButton!
-    private var sectorFields: [NSTextField] = []  // 短线侠板块强度前三名
+    private var sectorFields: [NSTextField] = []  // 短线侠板块强度前三名（最强）
+    private var sectorWeakFields: [NSTextField] = []  // 短线侠板块强度后三名（最弱）
 
     private var monitorState = MonitorState.shared
     private var timer: Timer?
@@ -156,8 +157,20 @@ class FloatingContentView: NSView {
         toggleBtn.action = #selector(toggleMonitoring)
         addSubview(toggleBtn)
 
-        // 板块强度前三名
+        // 板块强度前三名（最强）
         sectorFields = (0..<3).map { _ in
+            let f = NSTextField(labelWithString: "")
+            f.font = NSFont.systemFont(ofSize: 10, weight: .semibold)
+            f.textColor = NSColor(calibratedRed: 0.4, green: 0.4, blue: 0.4, alpha: 1)
+            f.alignment = .center
+            f.drawsBackground = false
+            f.isBezeled = false
+            addSubview(f)
+            return f
+        }
+
+        // 板块强度后三名（最弱）
+        sectorWeakFields = (0..<3).map { _ in
             let f = NSTextField(labelWithString: "")
             f.font = NSFont.systemFont(ofSize: 10, weight: .semibold)
             f.textColor = NSColor(calibratedRed: 0.4, green: 0.4, blue: 0.4, alpha: 1)
@@ -175,7 +188,8 @@ class FloatingContentView: NSView {
         let w = bounds.width
         let h = bounds.height
         let cyTop: CGFloat = h - 16           // 顶行 y 位置
-        let cyBottom: CGFloat = 2             // 底行 y 位置
+        let cyStrong: CGFloat = 20            // 中行（最强板块）
+        let cyWeak: CGFloat = 2               // 底行（最弱板块）
 
         // 顶行：偏离度 | 信号 | 沪深300 | toggle
         deviationField.frame = NSRect(x: 4, y: cyTop, width: 58, height: 14)
@@ -183,10 +197,15 @@ class FloatingContentView: NSView {
         marketField.frame = NSRect(x: 100, y: cyTop, width: 86, height: 14)
         toggleBtn.frame = NSRect(x: w - 16, y: cyTop, width: 12, height: 12)
 
-        // 底行：3个板块（前3名）
+        // 中行：最强3个板块
         let sectorWidth: CGFloat = (w - 8) / 3
         for (i, field) in sectorFields.enumerated() {
-            field.frame = NSRect(x: 4 + CGFloat(i) * sectorWidth, y: cyBottom, width: sectorWidth, height: 12)
+            field.frame = NSRect(x: 4 + CGFloat(i) * sectorWidth, y: cyStrong, width: sectorWidth, height: 12)
+        }
+
+        // 底行：最弱3个板块
+        for (i, field) in sectorWeakFields.enumerated() {
+            field.frame = NSRect(x: 4 + CGFloat(i) * sectorWidth, y: cyWeak, width: sectorWidth, height: 12)
         }
     }
 
@@ -326,7 +345,7 @@ class FloatingContentView: NSView {
         marketField.stringValue = marketText
         marketField.textColor = marketColor
 
-        // 短线侠板块强度前三名（板块名+涨停数）
+        // 短线侠板块强度前三名（最强，板块名+涨停数）
         let sectors = state.sectorTop3
         for (i, field) in sectorFields.enumerated() {
             if i < sectors.count {
@@ -340,6 +359,18 @@ class FloatingContentView: NSView {
                 } else {
                     field.textColor = NSColor(calibratedRed: 0.4, green: 0.4, blue: 0.4, alpha: 1)
                 }
+            } else {
+                field.stringValue = ""
+            }
+        }
+
+        // 短线侠板块强度后三名（最弱，绿色显示）
+        let weakSectors = state.sectorBottom3
+        for (i, field) in sectorWeakFields.enumerated() {
+            if i < weakSectors.count {
+                let s = weakSectors[i]
+                field.stringValue = "\(s.name)\(s.limitUp)板"
+                field.textColor = NSColor(calibratedRed: 0, green: 0.55, blue: 0, alpha: 1)
             } else {
                 field.stringValue = ""
             }
