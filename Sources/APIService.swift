@@ -372,19 +372,22 @@ class APIService {
                 return
             }
 
-            var result: [SectorStrength] = []
+            var byName: [String: SectorStrength] = [:]
             for plate in plates {
                 // [0]=code [1]=name [2]=强度(Int) [3]=成交额 [4]=涨停数(String) [5]=占比
+                // 接口数据存在重复条目（同code或同名出现两次），同名保留强度更高的
                 guard plate.count >= 5,
-                  let name = plate[1] as? String else { continue }
+                      let name = plate[1] as? String else { continue }
                 let strength = plate[2] as? Int ?? 0
                 let limitUpStr = plate[4] as? String
                 let limitUp = Int(limitUpStr ?? "") ?? (plate[4] as? Int ?? 0)
-                result.append(SectorStrength(name: name, strength: strength, limitUp: limitUp))
+                let item = SectorStrength(name: name, strength: strength, limitUp: limitUp)
+                if let existing = byName[name], existing.strength >= strength { continue }
+                byName[name] = item
             }
 
-            // 按强度降序（接口本身已降序，本地再保证一次）
-            result.sort { $0.strength > $1.strength }
+            // 按强度降序
+            let result = byName.values.sorted { $0.strength > $1.strength }
 
             Logger.shared.info("板块强度解析成功: 共\(result.count)条, Top3=\(result.prefix(3).map { "\($0.name)(\($0.strength))/\($0.limitUp)涨停" }.joined(separator: ", "))")
             completion(result)
